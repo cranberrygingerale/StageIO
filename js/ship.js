@@ -100,6 +100,7 @@ SG.Ship = class Ship {
       const px = (p.x - com.x) * scale;
       const py = (p.y - com.y) * scale;
       SG.PartRender.draw(ctx, t, px, py, scale, {
+        sx: p.sx, sy: p.sy,
         dead: !this.alive,
         flame: t.category === "engine" && this.thrusting
           ? { throttle: this.throttle, phase: this._flame }

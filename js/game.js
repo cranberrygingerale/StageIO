@@ -41,9 +41,11 @@ SG.Game = class Game {
     this.ctx = canvas.getContext("2d");
     this.cfg = SG.Config;
 
-    // Build the system: prefer a saved/edited one, else the stock system.
-    const defs = SG.SystemStore.load() || SG.Systems.default;
-    this.world = new SG.World(SG.buildSystem(defs));
+    // Build the system: saved/edited defs (normalized back to raw scale) or
+    // stock, then scaled by the chosen difficulty (world size).
+    this.worldScale = (SG.Difficulty && SG.Difficulty.load() || { scale: 0.1 }).scale;
+    this.world = new SG.World(SG.buildSystem(SG.scaleSystem(this._rawDefs(), this.worldScale)));
+    this.uiMode = "flight";
 
     const shipDefs = SG.ShipStore.load() || SG.Ships.default();
     this.ship = new SG.Ship(this.cfg, new SG.Assembly(shipDefs));
@@ -114,6 +116,27 @@ SG.Game = class Game {
     this.canvas.style.height = window.innerHeight + "px";
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.camera.setViewport(window.innerWidth, window.innerHeight);
+  }
+
+  // Saved (or stock) system defs, normalized back to raw (unscaled) values.
+  _rawDefs() {
+    const saved = SG.SystemStore.load();
+    if (!saved) return SG.Systems.default;
+    return SG.scaleSystem(saved, 1 / SG.SystemStore.loadScale());
+  }
+
+  // Rebuild the world at a new difficulty (world scale). Keeps any custom
+  // system the player built, just rescaled.
+  applyDifficulty(preset) {
+    this.worldScale = preset.scale;
+    this.rebuildSystem(SG.scaleSystem(this._rawDefs(), preset.scale));
+  }
+
+  // "menu" | "build" | "flight" — the flight HUD/legend only show in flight.
+  setUiMode(mode) {
+    this.uiMode = mode;
+    if (typeof document !== "undefined" && document.body && document.body.classList)
+      document.body.classList.toggle("no-flight-ui", mode !== "flight");
   }
 
   // Install a freshly-built ship design and put it on the pad (from the builder).
@@ -301,8 +324,12 @@ SG.Game = class Game {
           break;
         case "toggleBuilder": if (SG.builder) SG.builder.toggle(); break;
         case "closeBuilder":
+          // Esc walks up the chain: ship builder → system builder → menu ⇄ flight.
           if (SG.shipBuilder && SG.shipBuilder.isOpen()) SG.shipBuilder.close();
-          else if (SG.builder) SG.builder.close();
+          else if (SG.builder && SG.builder.isOpen()) SG.builder.close();
+          else if (SG.menu && SG.menu.isOpen()) {
+            SG.menu.hide(); this.paused = false; this.setUiMode("flight");
+          } else if (SG.menu) SG.menu.show();
           break;
       }
     }

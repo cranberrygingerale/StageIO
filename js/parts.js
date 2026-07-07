@@ -59,22 +59,50 @@ SG.Parts = {
   get(id) { return this.catalog[id]; },
   list() { return Object.values(this.catalog); },
 
-  // Local attachment nodes for a part type.
-  nodes(type) {
+  // Local attachment nodes for a part type at a given parametric scale.
+  nodes(type, sx, sy) {
+    const h = type.h * (sy || 1);
     const n = [];
-    if (type.hasTop) n.push({ x: 0, y: -type.h / 2, kind: "top" });
-    if (type.hasBottom) n.push({ x: 0, y: type.h / 2, kind: "bottom" });
+    if (type.hasTop) n.push({ x: 0, y: -h / 2, kind: "top" });
+    if (type.hasBottom) n.push({ x: 0, y: h / 2, kind: "bottom" });
     return n;
+  },
+
+  // --- Parametric design ------------------------------------------------------
+  // A placed part may carry sx/sy (width/height multipliers). Effective stats:
+  //   tanks & structure: mass/fuel ∝ sx²·sy  (volume: width is diameter)
+  //   engines:           thrust & mass ∝ sx² (nozzle area; TWR stays constant —
+  //                      the UI locks engines to uniform scale sx = sy)
+  scaleLimits(type) {
+    if (type.category === "engine") return { min: 0.6, max: 3.0, uniform: true };
+    if (type.category === "pod") return { min: 0.8, max: 1.6, uniform: false };
+    return { min: 0.5, max: 3.0, uniform: false };   // tanks, nose, decoupler
+  },
+
+  effective(type, part) {
+    const sx = (part && part.sx) || 1;
+    const sy = (part && part.sy) || 1;
+    const vol = sx * sx * sy;
+    const engine = type.category === "engine";
+    return {
+      w: type.w * sx,
+      h: type.h * sy,
+      dryMass: type.dryMass * (engine ? sx * sx : vol),
+      fuel: (type.fuel || 0) * vol,
+      thrust: (type.thrust || 0) * sx * sx,
+      ve: type.ve || 0,
+    };
   },
 };
 
 // --- Shared part renderer (builder AND flight use this, so they can't drift) --
 // Draws one part centred at (cx, cy) in screen px, `scale` px per metre.
-// opts: { dead: tint red (crashed), flame: {throttle, phase} exhaust when firing }
+// opts: { dead: tint red, flame: {throttle, phase} exhaust when firing,
+//         sx/sy: parametric width/height multipliers }
 SG.PartRender = {
   draw(ctx, t, cx, cy, scale, opts) {
     opts = opts || {};
-    const w = t.w * scale, h = t.h * scale;
+    const w = t.w * (opts.sx || 1) * scale, h = t.h * (opts.sy || 1) * scale;
     const col = opts.dead ? "#7a3b3b" : t.color;
     ctx.save();
     ctx.translate(cx, cy);

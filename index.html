@@ -6,8 +6,11 @@
   <title>StageIO — Orbital Sandbox</title>
   <link rel="stylesheet" href="css/style.css" />
 </head>
-<body>
+<body class="no-flight-ui">
   <canvas id="game"></canvas>
+
+  <!-- Start menu (difficulty / world-scale selection) -->
+  <div id="menu"></div>
 
   <!-- HUD overlay (DOM, not canvas — easier to style) -->
   <div id="hud">
@@ -40,7 +43,7 @@
     <div><kbd>G</kbd> Stage &middot; <kbd>,</kbd> <kbd>.</kbd> Warp &middot; <kbd>Wheel</kbd> Zoom</div>
     <div><kbd>M</kbd> Map/Craft &middot; <kbd>[</kbd> <kbd>]</kbd> Focus &middot; <kbd>F</kbd> Frame</div>
     <div><kbd>V</kbd> Ship builder &middot; <kbd>B</kbd> System builder</div>
-    <div><kbd>R</kbd> Reset (relaunch)</div>
+    <div><kbd>R</kbd> Relaunch &middot; <kbd>Esc</kbd> Menu</div>
   </div>
 
   <!-- Ship builder scene (renders on the canvas; these are its side panels) -->
@@ -63,5 +66,6 @@
   <script src="js/game.js"></script>
   <script src="js/shipbuilder.js"></script>
   <script src="js/systembuilder.js"></script>
+  <script src="js/menu.js"></script>
 </body>
 </html>

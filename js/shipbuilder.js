@@ -35,6 +35,7 @@ SG.ShipBuilder = class ShipBuilder {
     this.open = true;
     SG.game.buildMode = true;
     SG.game.paused = true;
+    SG.game.setUiMode("build");        // flight HUD hidden while building
     // Start from whatever the flight ship currently is, so edits are continuous.
     this.defs = SG.game.ship.assembly.toDefs();
     this._autoFit();
@@ -46,6 +47,7 @@ SG.ShipBuilder = class ShipBuilder {
     this.open = false;
     SG.game.buildMode = false;
     SG.game.paused = false;
+    SG.game.setUiMode("flight");
     this.heldId = null;
     this.root.classList.remove("visible");
   }
@@ -134,28 +136,53 @@ SG.ShipBuilder = class ShipBuilder {
   }
 
   _updateDragSnap() {
-    const t = SG.Parts.get(this.defs[this.dragIndex].id);
+    const held = this.defs[this.dragIndex];
+    const t = SG.Parts.get(held.id);
     const others = this.defs.filter((_, i) => i !== this.dragIndex);
     if (others.length === 0) { this.snapPos = { x: this.cursor.x, y: this.cursor.y }; return; }
-    this.snapPos = SG.AssemblyBuild.snap(this.defs, t, this.cursor.x, this.cursor.y, this._eps(), this.defs[this.dragIndex]);
+    this.snapPos = SG.AssemblyBuild.snap(
+      this.defs, t, this.cursor.x, this.cursor.y, this._eps(), held, { sx: held.sx, sy: held.sy }
+    );
   }
 
   _placeHeld() {
     this._updateHeldSnap();
     if (!this.snapPos) { this._msg("No attachment point here."); return; }
-    this.defs.push({ id: this.heldId, x: this.snapPos.x, y: this.snapPos.y });
+    this.defs.push({ id: this.heldId, x: this.snapPos.x, y: this.snapPos.y, sx: 1, sy: 1 });
     this.selected = this.defs.length - 1;
     // Keep the tool active for placing multiples (like SFS). Shift-less = keep.
     this._refresh();
   }
 
   _partAt(bx, by) {
-    // Topmost part whose box contains the point.
+    // Topmost part whose (parametric) box contains the point.
     for (let i = this.defs.length - 1; i >= 0; i--) {
-      const p = this.defs[i], t = SG.Parts.get(p.id);
-      if (bx >= p.x - t.w / 2 && bx <= p.x + t.w / 2 && by >= p.y - t.h / 2 && by <= p.y + t.h / 2) return i;
+      const p = this.defs[i];
+      const e = SG.Parts.effective(SG.Parts.get(p.id), p);
+      if (bx >= p.x - e.w / 2 && bx <= p.x + e.w / 2 && by >= p.y - e.h / 2 && by <= p.y + e.h / 2) return i;
     }
     return -1;
+  }
+
+  // Resize the selected part and re-flow the vertical stack so nodes stay
+  // flush: parts above shift up by half the height change, parts below down.
+  _resizeSelected(sx, sy) {
+    const p = this.defs[this.selected];
+    if (!p) return;
+    const t = SG.Parts.get(p.id);
+    const lim = SG.Parts.scaleLimits(t);
+    sx = Math.max(lim.min, Math.min(lim.max, sx));
+    sy = lim.uniform ? sx : Math.max(lim.min, Math.min(lim.max, sy));
+    const oldH = t.h * (p.sy || 1);
+    const newH = t.h * sy;
+    const dh = (newH - oldH) / 2;
+    for (const o of this.defs) {
+      if (o === p) continue;
+      if (o.y < p.y - 1e-9) o.y -= dh;        // above: push up
+      else if (o.y > p.y + 1e-9) o.y += dh;   // below: push down
+    }
+    p.sx = sx; p.sy = sy;
+    this._renderStats();
   }
 
   _deleteSelected() {
@@ -192,8 +219,9 @@ SG.ShipBuilder = class ShipBuilder {
       this._drawGhost(ctx, this.heldId, pos, !!this.snapPos);
     }
     if (this.dragIndex >= 0) {
+      const d = this.defs[this.dragIndex];
       const pos = this.snapPos || this.cursor;
-      this._drawGhost(ctx, this.defs[this.dragIndex].id, pos, !!this.snapPos);
+      this._drawGhost(ctx, d.id, pos, !!this.snapPos, { sx: d.sx, sy: d.sy });
     }
 
     // Centre-of-mass marker.
@@ -225,9 +253,10 @@ SG.ShipBuilder = class ShipBuilder {
   _drawPart(ctx, p, selected, alpha) {
     const t = SG.Parts.get(p.id);
     const s = this.toScreen(p.x, p.y);
-    SG.PartRender.draw(ctx, t, s.x, s.y, this.scale, { alpha });
+    SG.PartRender.draw(ctx, t, s.x, s.y, this.scale, { alpha, sx: p.sx, sy: p.sy });
     if (selected) {
-      const w = t.w * this.scale, h = t.h * this.scale;
+      const e = SG.Parts.effective(t, p);
+      const w = e.w * this.scale, h = e.h * this.scale;
       ctx.save();
       ctx.strokeStyle = "#ffffff"; ctx.lineWidth = 1.5; ctx.setLineDash([4, 3]);
       ctx.strokeRect(s.x - w / 2 - 2, s.y - h / 2 - 2, w + 4, h + 4);
@@ -235,13 +264,14 @@ SG.ShipBuilder = class ShipBuilder {
     }
   }
 
-  _drawGhost(ctx, id, pos, valid) {
+  _drawGhost(ctx, id, pos, valid, scaleXY) {
     const t = SG.Parts.get(id);
     const s = this.toScreen(pos.x, pos.y);
+    const sx = (scaleXY && scaleXY.sx) || 1, sy = (scaleXY && scaleXY.sy) || 1;
     ctx.save();
     ctx.globalAlpha = 0.55;
-    SG.PartRender.draw(ctx, t, s.x, s.y, this.scale, { alpha: 0.55 });
-    const w = t.w * this.scale, h = t.h * this.scale;
+    SG.PartRender.draw(ctx, t, s.x, s.y, this.scale, { sx, sy });
+    const w = t.w * sx * this.scale, h = t.h * sy * this.scale;
     ctx.globalAlpha = 1;
     ctx.strokeStyle = valid ? "#5dff9b" : "#ff5d6c";
     ctx.lineWidth = 2;
@@ -258,7 +288,7 @@ SG.ShipBuilder = class ShipBuilder {
        </button>`).join("");
 
     this.root.innerHTML = `
-      <div class="sb-head"><span>🚀 SHIP BUILDER</span><button data-act="close" class="x">✕</button></div>
+      <div class="sb-head"><span>🚀 SHIP BUILDER</span><button data-act="menu" class="mini">Menu</button><button data-act="close" class="x" title="Fly (Esc)">✕</button></div>
       <div class="sb-palette">
         <div class="sub-title">PARTS</div>
         ${palette}
@@ -267,6 +297,7 @@ SG.ShipBuilder = class ShipBuilder {
       <div class="sb-stats">
         <div class="sub-title">VEHICLE</div>
         <div id="sb-stat-rows"></div>
+        <div id="sb-part"></div>
         <div class="sb-actions">
           <button data-act="launch" class="primary">🚀 Launch</button>
           <button data-act="save">Save</button>
@@ -296,6 +327,8 @@ SG.ShipBuilder = class ShipBuilder {
       }
       case "clear": this.defs = []; this.selected = -1; this.heldId = null; this._refresh(); break;
       case "stock": this.defs = SG.Ships.default(); this.selected = -1; this._autoFit(); this._refresh(); break;
+      case "del-part": this._deleteSelected(); break;
+      case "menu": this.close(); if (SG.menu) SG.menu.show(); break;
     }
   }
 
@@ -318,10 +351,57 @@ SG.ShipBuilder = class ShipBuilder {
   _refresh() {
     if (this.dragIndex < 0 && this.heldId) this._updateHeldSnap();
     this._renderStats();
+    this._renderPartPanel();
     // Reflect held/selected in the palette.
     this.root.querySelectorAll(".part-btn").forEach((b) => {
       b.classList.toggle("held", b.dataset.part === this.heldId);
     });
+  }
+
+  // Parametric controls for the selected part (Juno/SFS-style resizing).
+  _renderPartPanel() {
+    const el = this.root.querySelector("#sb-part");
+    if (!el) return;
+    const p = this.defs[this.selected];
+    if (!p) { el.innerHTML = ""; return; }
+    const t = SG.Parts.get(p.id);
+    const lim = SG.Parts.scaleLimits(t);
+    const slider = (label, field, val) =>
+      `<label class="sb-slider">${label} <span class="sv">${(val * 100).toFixed(0)}%</span>
+         <input type="range" data-f="${field}" min="${lim.min * 100}" max="${lim.max * 100}" value="${val * 100}">
+       </label>`;
+    el.innerHTML =
+      `<div class="sub-title" style="margin-top:12px">PART · ${t.name}</div>` +
+      (lim.uniform
+        ? slider("Size", "s", p.sx || 1)
+        : slider("Width", "sx", p.sx || 1) + slider("Height", "sy", p.sy || 1)) +
+      `<div class="sb-row" id="sb-part-info"></div>` +
+      `<button data-act="del-part" class="danger" style="margin-top:6px">Delete part</button>`;
+
+    el.querySelectorAll("input[type=range]").forEach((inp) => {
+      inp.addEventListener("input", () => {
+        const v = parseFloat(inp.value) / 100;
+        const f = inp.dataset.f;
+        const sx = f === "sy" ? (p.sx || 1) : v;
+        const sy = f === "sx" ? (p.sy || 1) : v;
+        this._resizeSelected(sx, sy);
+        const lbl = inp.closest("label").querySelector(".sv");
+        if (lbl) lbl.textContent = (v * 100).toFixed(0) + "%";
+        this._renderPartInfo();
+      });
+    });
+    this._renderPartInfo();
+  }
+
+  _renderPartInfo() {
+    const el = this.root.querySelector("#sb-part-info");
+    const p = this.defs[this.selected];
+    if (!el || !p) return;
+    const e = SG.Parts.effective(SG.Parts.get(p.id), p);
+    let text = ((e.dryMass + e.fuel) / 1000).toFixed(2) + " t";
+    if (e.fuel) text += " · " + (e.fuel / 1000).toFixed(2) + " t fuel";
+    if (e.thrust) text += " · " + Math.round(e.thrust / 1000) + " kN";
+    el.innerHTML = `<span>Stats</span><span>${text}</span>`;
   }
 
   _renderStats() {
@@ -367,12 +447,12 @@ SG.ShipBuilder = class ShipBuilder {
   _stageDv(a, groups, idx) {
     let massAbove = a.mass();
     for (let i = 0; i < idx; i++)
-      for (const p of groups[i]) massAbove -= SG.Parts.get(p.id).dryMass + (SG.Parts.get(p.id).fuel || 0);
+      for (const p of groups[i]) { const e = a.eff(p); massAbove -= e.dryMass + e.fuel; }
     const g = groups[idx];
-    const fuel = g.reduce((m, p) => m + (SG.Parts.get(p.id).fuel || 0), 0);
+    const fuel = g.reduce((m, p) => m + a.eff(p).fuel, 0);
     const engs = g.filter((p) => SG.Parts.get(p.id).category === "engine");
-    const thr = engs.reduce((t, p) => t + SG.Parts.get(p.id).thrust, 0);
-    const flow = engs.reduce((f, p) => f + SG.Parts.get(p.id).thrust / SG.Parts.get(p.id).ve, 0);
+    const thr = engs.reduce((t, p) => t + a.eff(p).thrust, 0);
+    const flow = engs.reduce((f, p) => { const e = a.eff(p); return f + e.thrust / e.ve; }, 0);
     const ve = flow > 0 ? thr / flow : 0;
     const m1 = massAbove - fuel;
     return ve > 0 && fuel > 0 && m1 > 0 ? ve * Math.log(massAbove / m1) : 0;

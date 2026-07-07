@@ -453,3 +453,91 @@ kbd {
 .sb-warn { margin-top: 6px; color: #ffb454; font-size: 11px; }
 .sb-ok { margin-top: 6px; color: #5dff9b; font-size: 11px; }
 #sb-msg { margin-top: 6px; color: #7fd0a0; font-size: 11px; min-height: 13px; }
+
+.sb-head .mini {
+  background: rgba(90, 150, 220, 0.16);
+  border: 1px solid rgba(90, 150, 220, 0.4);
+  border-radius: 5px;
+  color: #cfe8ff;
+  padding: 3px 9px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.sb-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 6px 0;
+  font-size: 11px;
+  color: #6f8fb5;
+}
+.sb-slider .sv { color: #e8f3ff; float: right; }
+.sb-slider input[type="range"] { width: 100%; accent-color: #4a8fd0; }
+
+/* ---- Flight UI hidden outside flight (menu / build modes) ---- */
+body.no-flight-ui #hud,
+body.no-flight-ui #legend { display: none; }
+
+/* ---- Start menu ---- */
+#menu {
+  position: absolute;
+  inset: 0;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(ellipse at center, rgba(8, 16, 30, 0.55), rgba(2, 6, 12, 0.88));
+  z-index: 20;
+}
+#menu.visible { display: flex; }
+
+.menu-inner { text-align: center; max-width: 860px; padding: 24px; }
+
+.menu-title {
+  font-size: 56px;
+  letter-spacing: 10px;
+  color: #e8f3ff;
+  text-shadow: 0 0 30px rgba(90, 160, 255, 0.5);
+}
+.menu-title span { color: #5dff9b; }
+
+.menu-sub { color: #8fb4dc; letter-spacing: 3px; font-size: 13px; margin: 6px 0 28px; }
+
+.menu-cards { display: flex; gap: 16px; justify-content: center; flex-wrap: wrap; }
+
+.menu-card {
+  position: relative;
+  width: 230px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+  padding: 18px 16px;
+  background: rgba(10, 20, 38, 0.85);
+  border: 1px solid rgba(90, 150, 220, 0.4);
+  border-radius: 12px;
+  color: #cfe8ff;
+  cursor: pointer;
+  font-family: inherit;
+  transition: transform 0.12s ease, border-color 0.12s ease;
+}
+.menu-card:hover { transform: translateY(-4px); border-color: #5dff9b; }
+
+.menu-card .tag {
+  position: absolute;
+  top: -9px; right: 12px;
+  font-size: 9px;
+  letter-spacing: 1px;
+  padding: 2px 8px;
+  border-radius: 8px;
+  background: #143122;
+  border: 1px solid #5dff9b;
+  color: #5dff9b;
+}
+.menu-card .mc-name { font-size: 20px; color: #ffffff; }
+.menu-card .mc-scale { font-size: 11px; color: #8fb4dc; letter-spacing: 1px; }
+.menu-card .mc-orbit { font-size: 12px; color: #5dff9b; }
+.menu-card .mc-blurb { font-size: 11px; color: #9fb8d6; line-height: 1.45; }
+
+.menu-hint { margin-top: 26px; color: #6f8fb5; font-size: 12px; }

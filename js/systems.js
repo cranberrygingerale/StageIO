@@ -60,6 +60,23 @@ SG.Systems = {
   ],
 };
 
+// Scale a system's definitions by factor `s` (difficulty / world size):
+//   radius, orbitRadius, atmosphere  × s     (all lengths shrink together)
+//   mu                               × s²    (keeps surface gravity g = mu/r²
+//                                             constant, while orbital speed
+//                                             v = sqrt(mu/r) scales by √s —
+//                                             smaller worlds are easier to orbit)
+// Pure function: returns new defs, never mutates. scaleSystem(defs, 1/s) inverts.
+SG.scaleSystem = function (defs, s) {
+  return defs.map((d) => ({
+    ...d,
+    radius: d.radius * s,
+    mu: d.mu * s * s,
+    atmosphere: (d.atmosphere || 0) * s,
+    orbitRadius: d.orbitRadius ? d.orbitRadius * s : d.orbitRadius,
+  }));
+};
+
 // Build a live SG.SolarSystem from an array of definitions.
 // Robust to arbitrary user-authored systems (from the builder / import).
 SG.buildSystem = function (defs) {
@@ -93,15 +110,27 @@ SG.buildSystem = function (defs) {
 // --- Persistence (localStorage) ---------------------------------------------
 SG.SystemStore = {
   KEY: "stageio.system.v1",
+  KEY_SCALE: "stageio.system.scale.v1",
 
   save(defs) {
     try {
       localStorage.setItem(this.KEY, JSON.stringify(defs));
+      // Record the world scale these defs were saved at, so a later difficulty
+      // change can normalize back to raw scale without compounding.
+      const s = (SG.game && SG.game.worldScale) || 1;
+      localStorage.setItem(this.KEY_SCALE, String(s));
       return true;
     } catch (e) {
       console.warn("[SG.SystemStore] save failed:", e);
       return false;
     }
+  },
+
+  loadScale() {
+    try {
+      const s = parseFloat(localStorage.getItem(this.KEY_SCALE));
+      return isFinite(s) && s > 0 ? s : 1;
+    } catch (e) { return 1; }
   },
 
   load() {
