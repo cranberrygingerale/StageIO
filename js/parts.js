@@ -54,6 +54,24 @@ SG.Parts = {
       color: "#caa14a", hasTop: true, hasBottom: true,
       desc: "Stage separator — jettisons everything below it.",
     },
+    chute: {
+      id: "chute", name: "Parachute", category: "chute",
+      w: 1.6, h: 0.9, dryMass: 70, chuteArea: 180,
+      color: "#c96a3f", hasTop: false, hasBottom: true,
+      desc: "Deploy with P below 350 m/s for a soft landing.",
+    },
+    shield: {
+      id: "shield", name: "Heat Shield", category: "shield",
+      w: 2.4, h: 0.5, dryMass: 250,
+      color: "#8a4a2a", hasTop: true, hasBottom: true,
+      desc: "Ablative plate — survive reentry heating.",
+    },
+    fins: {
+      id: "fins", name: "Fin Ring", category: "fin",
+      w: 2.2, h: 0.9, dryMass: 80,
+      color: "#5a7a9c", hasTop: true, hasBottom: true,
+      desc: "Aerodynamic fins — sharper turning.",
+    },
   },
 
   get(id) { return this.catalog[id]; },
@@ -144,6 +162,36 @@ SG.PartRender = {
       ctx.fillRect(-w / 2, -h / 2, w, h);
       ctx.fillStyle = "rgba(0,0,0,0.25)";
       ctx.fillRect(-w / 2, -h * 0.1, w, h * 0.2);
+    } else if (t.category === "chute") {
+      // Packed canopy: rounded dome with strap lines.
+      ctx.beginPath();
+      ctx.moveTo(-w / 2, h / 2);
+      ctx.quadraticCurveTo(-w / 2, -h / 2, 0, -h / 2);
+      ctx.quadraticCurveTo(w / 2, -h / 2, w / 2, h / 2);
+      ctx.closePath();
+      ctx.fillStyle = col; ctx.fill();
+      ctx.strokeStyle = "rgba(0,0,0,0.3)";
+      ctx.lineWidth = Math.max(0.5, scale * 0.1);
+      ctx.beginPath(); ctx.moveTo(0, -h / 2); ctx.lineTo(0, h / 2); ctx.stroke();
+    } else if (t.category === "shield") {
+      // Ablative dish: shallow arc bulging downward.
+      ctx.beginPath();
+      ctx.moveTo(-w / 2, -h / 2);
+      ctx.lineTo(w / 2, -h / 2);
+      ctx.quadraticCurveTo(w * 0.3, h / 2, 0, h / 2);
+      ctx.quadraticCurveTo(-w * 0.3, h / 2, -w / 2, -h / 2);
+      ctx.closePath();
+      ctx.fillStyle = col; ctx.fill();
+    } else if (t.category === "fin") {
+      // Ring segment with fins protruding either side.
+      ctx.fillStyle = col;
+      ctx.fillRect(-w * 0.35, -h / 2, w * 0.7, h);
+      ctx.beginPath();                                  // left fin
+      ctx.moveTo(-w * 0.35, h / 2); ctx.lineTo(-w * 0.8, h / 2); ctx.lineTo(-w * 0.35, -h / 2);
+      ctx.closePath(); ctx.fill();
+      ctx.beginPath();                                  // right fin
+      ctx.moveTo(w * 0.35, h / 2); ctx.lineTo(w * 0.8, h / 2); ctx.lineTo(w * 0.35, -h / 2);
+      ctx.closePath(); ctx.fill();
     } else {
       // Tank: body with fuel-band seams.
       ctx.fillStyle = col;

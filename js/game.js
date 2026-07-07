@@ -13,8 +13,13 @@ SG.Config = {
   maxFuel: 100,
   fuelBurn: 0.12,           // fuel/sec while thrusting (~830s total burn)
   thrustAccel: 60,          // m/s^2 at full throttle (TWR ~6 at Earth's surface)
-  turnRate: 1.8,            // rad/sec
+  turnAccel: 1.1,           // rad/s^2 torque authority baseline (mass-scaled)
+  maxAngVel: 1.4,           // rad/s rotation speed cap
   throttleRate: 0.6,        // throttle change per second (Shift up / Ctrl down)
+
+  // Aero
+  chuteMaxOpenSpeed: 350,   // m/s — canopy rips above this
+  atmoWarpMax: 10,          // max time warp inside an atmosphere (drag needs small steps)
 
   // Landing / crashing (measured RELATIVE to the dominant body)
   landingSpeed: 15,         // m/s
@@ -85,6 +90,7 @@ SG.Game = class Game {
       fuel: document.getElementById("hud-fuel"),
       mass: document.getElementById("hud-mass"),
       dv: document.getElementById("hud-dv"),
+      heat: document.getElementById("hud-heat"),
       stageList: document.getElementById("hud-stage-list"),
       warp: document.getElementById("hud-warp"),
       throttle: document.getElementById("hud-throttle"),
@@ -174,6 +180,8 @@ SG.Game = class Game {
     this.warpIndex = 0;
     this.crashTimer = 0;
     this.landed = false;
+    this.aero = null;
+    if (SG.Effects) SG.Effects.clear();
   }
 
   // Switch between craft view and map view, remembering each mode's zoom.
@@ -282,6 +290,18 @@ SG.Game = class Game {
     // --- Advance the simulation (numeric physics warp OR analytic rails warp) ---
     if (!this.paused) this._advanceWorld(frameTime);
 
+    // Particle effects + sound (real-time; skip spawning at high warp).
+    if (SG.Effects) {
+      const warp = this.cfg.warpLevels[this.warpIndex];
+      if (!this.paused && warp <= 4 && this.ship.alive) {
+        if (this.ship.thrusting) SG.Effects.emitExhaust(this.ship, frameTime);
+        if (this.aero && this.aero.qNorm > SG.Aero.PLASMA_THRESHOLD)
+          SG.Effects.emitPlasma(this.ship, this.dominant, this.aero.qNorm, frameTime);
+      }
+      SG.Effects.update(frameTime);
+    }
+    if (SG.Audio) SG.Audio.update(this.ship, this.aero);
+
     // Camera: craft view tracks the ship; map view stays on its focus target.
     // We SNAP (not ease) to the ship: it can be moving at tens of km/s in the
     // heliocentric frame, so an eased camera would lag thousands of metres —
@@ -306,7 +326,21 @@ SG.Game = class Game {
         case "engineToggle": this.ship.toggleEngine(); break;
         case "throttleMax": this.ship.setThrottle(1); break;
         case "throttleZero": this.ship.setThrottle(0); break;
-        case "stage": this.ship.stage(); break;
+        case "stage": {
+          const removed = this.ship.stage();
+          if (removed) {
+            if (SG.Audio) SG.Audio.thunk();
+            if (SG.Effects) SG.Effects.stagePuff(this.ship);
+          }
+          break;
+        }
+        case "chute": {
+          const dom = this.dominant;
+          const relSpeed = Math.hypot(this.ship.vx - dom.vx, this.ship.vy - dom.vy);
+          const res = this.ship.deployChute(relSpeed);
+          if (res === "ok" && SG.Audio) SG.Audio.chutePop();
+          break;
+        }
         case "toggleMap": this.toggleView(); break;
         case "focusNext": if (this.viewMode === "map") this.cycleFocus(1); break;
         case "focusPrev": if (this.viewMode === "map") this.cycleFocus(-1); break;
@@ -336,9 +370,26 @@ SG.Game = class Game {
     }
   }
 
+  // Largest warp index allowed inside an atmosphere (drag needs small steps
+  // and rails propagation ignores drag entirely).
+  _atmoWarpIndex() {
+    let idx = 0;
+    for (let i = 0; i < this.cfg.warpLevels.length; i++)
+      if (this.cfg.warpLevels[i] <= this.cfg.atmoWarpMax) idx = i;
+    return idx;
+  }
+
   // Decide numeric vs rails advancement for this frame and run it.
   _advanceWorld(frameTime) {
     const ship = this.ship;
+
+    // Inside an atmosphere, clamp warp hard (drag is integrated numerically).
+    if (ship.alive && !this.landed) {
+      const dom = this.world.system.dominantBody(ship.x, ship.y);
+      const alt = Math.hypot(ship.x - dom.x, ship.y - dom.y) - dom.radius;
+      if (SG.Aero.inAtmosphere(dom, alt))
+        this.warpIndex = Math.min(this.warpIndex, this._atmoWarpIndex());
+    }
 
     // Rails warp is only valid on a bound (or landed) trajectory. If the ship
     // is on an escape/hyperbolic path, drop back to the fastest physics warp.
@@ -412,6 +463,12 @@ SG.Game = class Game {
     ship.x = dom.x + ns.x; ship.y = dom.y + ns.y;
     ship.vx = dom.vx + ns.vx; ship.vy = dom.vy + ns.vy;
 
+    // Dipped into an atmosphere while on rails: drop to physics warp so drag
+    // takes over next frame (rails ignores it).
+    const altNow = Math.hypot(ship.x - dom.x, ship.y - dom.y) - dom.radius;
+    if (SG.Aero.inAtmosphere(dom, altNow))
+      this.warpIndex = Math.min(this.warpIndex, this._atmoWarpIndex());
+
     // Surface impact while warping (e.g. a warped suborbital arc).
     const ddx = ship.x - dom.x, ddy = ship.y - dom.y;
     const dd = Math.hypot(ddx, ddy);
@@ -425,6 +482,8 @@ SG.Game = class Game {
         this.landed = true;
       } else {
         ship.alive = false; this.crashTimer = 0; this.warpIndex = 0;
+        if (SG.Effects) SG.Effects.explosion(ship.x, ship.y, ship.assembly.height());
+        if (SG.Audio) SG.Audio.explosion();
       }
     }
     // Re-resolve the governing body (handles SOI transitions for the HUD).
@@ -445,6 +504,22 @@ SG.Game = class Game {
     this.dominant = dom;
 
     const thrust = ship.control(SG.Input, dt);
+
+    // Atmospheric drag + reentry heating (adds to the accel for this step).
+    const aero = SG.Aero.step(ship, dom, dt);
+    this.aero = aero;
+    thrust.ax += aero.ax;
+    thrust.ay += aero.ay;
+    if (aero.burning) {
+      ship.alive = false;
+      ship.burnedUp = true;
+      this.crashTimer = 0;
+      this.warpIndex = 0;
+      if (SG.Effects) SG.Effects.explosion(ship.x, ship.y, this.ship.assembly.height());
+      if (SG.Audio) SG.Audio.explosion();
+      return;
+    }
+
     SG.Physics.integrate(ship, dom, dt, thrust);
 
     // --- Surface interaction with the dominant body ---
@@ -465,6 +540,8 @@ SG.Game = class Game {
       } else {
         ship.alive = false;
         this.crashTimer = 0;
+        if (SG.Effects) SG.Effects.explosion(ship.x, ship.y, ship.assembly.height());
+        if (SG.Audio) SG.Audio.explosion();
       }
     } else {
       this.landed = false;
@@ -481,11 +558,17 @@ SG.Game = class Game {
   }
 
   _renderCraft(ctx, dt, highlight) {
+    // Camera shake (reentry / explosions) offsets the whole craft scene.
+    const sh = SG.Effects ? SG.Effects.shakeOffset() : { x: 0, y: 0 };
+    ctx.save();
+    ctx.translate(sh.x, sh.y);
     this.world.drawOrbits(ctx, this.camera);
     this.world.drawBodies(ctx, this.camera, { highlight, detail: true });
     this._drawTrajectory(ctx, false);
     this._drawVelocityVector(ctx);
+    if (SG.Effects) SG.Effects.draw(ctx, this.camera);
     this.ship.draw(ctx, this.camera, dt);      // true world scale (zoom-relative)
+    ctx.restore();
   }
 
   _renderMap(ctx, dt, highlight) {
@@ -634,6 +717,11 @@ SG.Game = class Game {
     h.fuel.textContent = Math.round(this.ship.fuelFraction() * 100) + "% (" + (asm.activeFuel() / 1000).toFixed(1) + " t)";
     if (h.mass) h.mass.textContent = (asm.mass() / 1000).toFixed(1) + " t";
     if (h.dv) h.dv.textContent = Math.round(asm.deltaV()).toLocaleString() + " m/s";
+    if (h.heat) {
+      const pct = Math.round(Math.min(1, this.ship.heat) * 100);
+      h.heat.textContent = pct + "%" + (this.ship.chuteDeployed ? " · ☂" : "");
+      h.heat.style.color = pct > 75 ? "#ff5d6c" : pct > 40 ? "#ffb454" : "";
+    }
     this._updateStageList(asm);
     if (h.warp) h.warp.textContent = this.cfg.warpLevels[this.warpIndex] + "×";
 
@@ -648,8 +736,14 @@ SG.Game = class Game {
     if (h.mode) h.mode.textContent = this.viewMode === "map" ? "MAP" : "CRAFT";
 
     let label = "SUBORBITAL", cls = "status";
-    if (!this.ship.alive) { label = "CRASHED"; cls = "status crashed"; }
+    if (!this.ship.alive) {
+      label = this.ship.burnedUp ? "BURNED UP" : "CRASHED";
+      cls = "status crashed";
+    }
     else if (this.landed) label = "LANDED";
+    else if (this.aero && this.aero.qNorm > SG.Aero.PLASMA_THRESHOLD) {
+      label = "REENTRY"; cls = "status crashed";
+    }
     else if (this.ship.engineOn && this.ship.throttle > 0 && !asm.hasFuel()) {
       // Engines starving: tell the pilot what to do about it.
       label = asm.stageCount() > 1 ? "STAGE SPENT — PRESS G" : "OUT OF FUEL";

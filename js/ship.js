@@ -10,11 +10,16 @@ SG.Ship = class Ship {
     // Physics state (world units / SI).
     this.x = 0; this.y = 0; this.vx = 0; this.vy = 0;
     this.angle = 0;                 // heading in radians; 0 = pointing +x
+    this.angVel = 0;                // angular velocity (rad/s) — torque model
     // Controls.
     this.throttle = 0;
     this.engineOn = false;
     this.thrusting = false;
     this.alive = true;
+    // Aero state.
+    this.heat = 0;                  // 0..1 (1 = thermal limit → burn-up)
+    this.chuteDeployed = false;
+    this.burnedUp = false;
     this._flame = 0;
   }
 
@@ -47,11 +52,25 @@ SG.Ship = class Ship {
     this.vx = body.vx || 0;
     this.vy = body.vy || 0;
     this.angle = padAngle;
+    this.angVel = 0;
     this.assembly.fillFuel();
     this.throttle = 0;
     this.engineOn = false;
     this.thrusting = false;
     this.alive = true;
+    this.heat = 0;
+    this.chuteDeployed = false;
+    this.burnedUp = false;
+  }
+
+  // Deploy parachutes (P). Only opens if fitted, not already out, and slow
+  // enough that the canopy survives. Returns "ok" | "none" | "fast".
+  deployChute(relSpeed) {
+    if (this.chuteDeployed || !this.alive) return "none";
+    if (this.assembly.chutes().length === 0) return "none";
+    if (relSpeed > this.cfg.chuteMaxOpenSpeed) return "fast";
+    this.chuteDeployed = true;
+    return "ok";
   }
 
   // Jettison the lowest stage. Returns removed parts (for a visual poof).
@@ -61,11 +80,24 @@ SG.Ship = class Ship {
     return removed;
   }
 
-  // Apply rotation + throttle-scaled thrust. Returns accel {ax,ay} for gravity
-  // integration. Acceleration = (thrust * throttle) / current mass.
+  // Angular acceleration available: heavier craft turn slower, fins help.
+  turnAuthority() {
+    const mass = this.assembly.mass() || 1;
+    const massFactor = Math.max(0.3, Math.min(2, Math.pow(8000 / mass, 0.3)));
+    return this.cfg.turnAccel * massFactor * this.assembly.finAuthority();
+  }
+
+  // Apply rotation (torque model) + throttle-scaled thrust. Returns accel
+  // {ax,ay} for gravity integration. Acceleration = thrust·throttle / mass.
   control(input, dt) {
-    if (input.isDown("left")) this.angle -= this.cfg.turnRate * dt;
-    if (input.isDown("right")) this.angle += this.cfg.turnRate * dt;
+    const auth = this.turnAuthority();
+    const steering = input.isDown("left") || input.isDown("right");
+    if (input.isDown("left")) this.angVel -= auth * dt;
+    if (input.isDown("right")) this.angVel += auth * dt;
+    if (!steering) this.angVel *= Math.exp(-3 * dt);        // SAS-style damping
+    this.angVel = Math.max(-this.cfg.maxAngVel, Math.min(this.cfg.maxAngVel, this.angVel));
+    this.angle += this.angVel * dt;
+
     if (input.isDown("throttleUp")) this.setThrottle(this.throttle + this.cfg.throttleRate * dt);
     if (input.isDown("throttleDown")) this.setThrottle(this.throttle - this.cfg.throttleRate * dt);
 
@@ -94,6 +126,38 @@ SG.Ship = class Ship {
     ctx.save();
     ctx.translate(s.x, s.y);
     ctx.rotate(this.angle + Math.PI / 2); // local +y (down) -> along -heading
+
+    // Reentry glow: envelope brightens with accumulated heat.
+    if (this.heat > 0.12) {
+      const hgt = this.assembly.height() * scale;
+      const glowR = Math.max(hgt * 0.9, 14);
+      const k = Math.min(1, this.heat);
+      const g = ctx.createRadialGradient(0, 0, glowR * 0.2, 0, 0, glowR);
+      g.addColorStop(0, `rgba(255,${Math.round(190 - 120 * k)},60,${0.35 * k})`);
+      g.addColorStop(1, "rgba(255,90,20,0)");
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(0, 0, glowR, 0, Math.PI * 2); ctx.fill();
+    }
+
+    // Open parachute canopy above the craft (local -y = nose direction).
+    if (this.chuteDeployed) {
+      const top = (this.assembly.bounds().minY - com.y) * scale;
+      const r = Math.max(10, 7 * scale);          // ~7 m canopy radius
+      const cy = top - r * 1.6;
+      ctx.strokeStyle = "rgba(210,140,90,0.9)";
+      ctx.lineWidth = Math.max(1, scale * 0.12);
+      ctx.beginPath();                              // shroud lines
+      ctx.moveTo(-r * 0.9, cy + r * 0.28); ctx.lineTo(0, top);
+      ctx.moveTo(r * 0.9, cy + r * 0.28); ctx.lineTo(0, top);
+      ctx.moveTo(0, cy); ctx.lineTo(0, top);
+      ctx.stroke();
+      ctx.beginPath();                              // canopy
+      ctx.arc(0, cy + r * 0.3, r, Math.PI, 0);
+      ctx.quadraticCurveTo(r * 0.5, cy + r * 0.55, 0, cy + r * 0.3);
+      ctx.quadraticCurveTo(-r * 0.5, cy + r * 0.55, -r, cy + r * 0.3);
+      ctx.fillStyle = "rgba(201,106,63,0.9)";
+      ctx.fill();
+    }
 
     for (const p of this.assembly.parts) {
       const t = this.assembly.type(p);

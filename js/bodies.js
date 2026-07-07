@@ -14,7 +14,9 @@ SG.Body = class Body {
     this.radius = def.radius;
     this.mu = def.mu;                       // G*M
     this.color = def.color || "#8899aa";
-    this.atmosphere = def.atmosphere || 0;
+    this.atmosphere = def.atmosphere || 0;   // atmosphere top altitude (m)
+    // Sea-level density (kg/m^3). Defaults earthlike when an atmosphere exists.
+    this.rho0 = def.rho0 !== undefined ? def.rho0 : (this.atmosphere > 0 ? 1.225 : 0);
     this.isHome = !!def.isHome;
 
     // Orbit around parent (ignored for the root body).
@@ -105,6 +107,7 @@ SG.SolarSystem = class SolarSystem {
       mu: b.mu,
       color: b.color,
       atmosphere: b.atmosphere,
+      rho0: b.rho0,
       orbitRadius: b.orbitRadius,
       phase: b.phase,
       isHome: b.isHome,

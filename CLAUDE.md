@@ -29,6 +29,9 @@ flight. Flight HUD/legend are CSS-hidden unless `game.uiMode === "flight"`
 | `js/input.js` | Key → logical action mapping; held-set + rising-edge presses |
 | `js/camera.js` | World↔screen transforms, zoom |
 | `js/physics.js` | Gravity, symplectic Euler `integrate`, orbit elements for HUD, `selfTest()` |
+| `js/aero.js` | Atmosphere density, drag, scale-free reentry heating (`SG.Aero.step` mutates `ship.heat`) |
+| `js/effects.js` | Particle pool (exhaust/plasma/explosion/smoke) + camera shake — craft view only |
+| `js/audio.js` | Synthesized WebAudio (engine/wind loops + one-shots); inits on first user gesture |
 | `js/kepler.js` | Analytic Kepler: elements/propagate/sampleEllipse/stateAtNu (rails warp, trajectory) |
 | `js/bodies.js` | `SG.Body`, `SG.SolarSystem` (on-rails motion, SOI `dominantBody`) |
 | `js/systems.js` | Real solar-system defs, `buildSystem`, **`scaleSystem`**, `SystemStore` (+save-scale) |
@@ -72,6 +75,16 @@ Singletons wired on DOMContentLoaded: `SG.game`, `SG.shipBuilder`,
   sum, so in flight it means "Δv remaining".
 - Ship physics point = assembly centre of mass; pad placement uses
   `assembly.bottomOffset()`.
+- **Aero (M1):** `body.atmosphere` is the atmosphere TOP altitude, `body.rho0`
+  sea-level density; H = top/12. Heating is SCALE-FREE:
+  `qNorm = (ρ/1.225)·(v/vOrbSurface)³` so reentry feels identical at every
+  difficulty. Unshielded craft burn at `ship.heat ≥ 1`; a heat-shield part
+  multiplies heating by `SHIELD_FACTOR`. Warp is clamped to `atmoWarpMax`
+  (10×) inside atmospheres — rails ignores drag, so never rails through air.
+  Rotation is a torque model (`ship.angVel`, mass-scaled `turnAuthority`,
+  fins multiply it); parachutes deploy via P below `chuteMaxOpenSpeed`.
+  Aero tunables live on `SG.Aero` (HEAT_RATE etc.) — retune via
+  `tests/verify_aero.js`, whose entry scenario is the balance benchmark.
 
 ## Testing pattern
 Harnesses in `tests/` load the real sources with
@@ -96,6 +109,9 @@ auto-discovers).
   `minShipPx` so it stays a visible marker. Keep that distinction.
 
 ## Where we are / what's next
-Done through **M0 + game-loop work**: menu/difficulty, parametric builder,
-stage-scoped fuel + per-stage HUD. Next per `ROADMAP.md`: **M1 — atmosphere,
-drag, reentry heating, parachutes, sound/particles**; then M2 maneuver nodes.
+Done: **M0**, game-loop (menu/difficulty/parametric builder/stage-scoped
+fuel), and **M1** (atmosphere, drag, reentry heating + burn-up, parachute/
+heat-shield/fin parts, torque rotation, particles, camera shake, synth audio).
+Next per `ROADMAP.md`: **M2 — maneuver nodes, SOI-crossing trajectory
+prediction, encounter markers**. Deferred from M1: landing legs (need M3
+radial attachment).

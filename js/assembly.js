@@ -32,6 +32,32 @@ SG.Assembly = class Assembly {
   hasPod() { return this.parts.some((p) => this.type(p).category === "pod"); }
   engines() { return this.parts.filter((p) => this.type(p).category === "engine"); }
   tanks() { return this.parts.filter((p) => this.type(p).category === "tank"); }
+  chutes() { return this.parts.filter((p) => this.type(p).category === "chute"); }
+  hasShield() { return this.parts.some((p) => this.type(p).category === "shield"); }
+  finCount() { return this.parts.filter((p) => this.type(p).category === "fin").length; }
+
+  // --- Aerodynamics ---
+  maxWidth() {
+    return this.parts.reduce((w, p) => Math.max(w, this.eff(p).w), 0);
+  }
+  // Effective drag area (Cd·A, m²). Cross-section from the widest part; a
+  // nose cone on top streamlines the stack. Open parachutes dominate.
+  dragArea(chutesOpen) {
+    const r = this.maxWidth() / 2;
+    const topPart = this.parts.reduce((a, b) => (a && a.y <= b.y ? a : b), null);
+    const cd = topPart && ["nose", "chute"].includes(this.type(topPart).category) ? 0.6 : 1.1;
+    let area = Math.PI * r * r * cd;
+    if (chutesOpen) {
+      area += this.chutes().reduce(
+        (s, p) => s + (this.type(p).chuteArea || 0) * (p.sx || 1) * (p.sx || 1) * 1.5, 0
+      );
+    }
+    return area;
+  }
+  // Turn-authority multiplier from fins (control surfaces / gimbal upgrade).
+  finAuthority() {
+    return Math.min(2, 1 + 0.35 * this.finCount());
+  }
 
   // --- Mass ---
   dryMass() { return this.parts.reduce((m, p) => m + this.eff(p).dryMass, 0); }

@@ -25,6 +25,7 @@ SG.Input = (function () {
       case "KeyZ":       return "throttleMax";    // full throttle
       case "KeyX":       return "throttleZero";   // cut throttle
       case "KeyG":       return "stage";          // jettison the lowest stage
+      case "KeyP":       return "chute";          // deploy parachute
       // --- View / camera / time ---
       case "KeyM":       return "toggleMap";
       case "BracketRight": return "focusNext";   // map: cycle focus target

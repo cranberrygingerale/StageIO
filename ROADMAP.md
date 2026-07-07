@@ -36,15 +36,21 @@ Known debt: no sound/particles; planets don't rotate; rotation is instant
 - **Next:** publish to itch.io / GitHub Pages / Vercel; every milestone ends
   with a deployed version.
 
-## Milestone 1 — Flight Feel & Atmosphere
-- Exponential atmosphere density per body; drag; terminal velocity.
-- Reentry heating with plasma effects + part overheat/destruction.
-- New parts: parachute, fins, landing legs, heat shield.
-- Effects: engine particles, explosions, camera shake, WebAudio sound.
-- Angular velocity + torque limits instead of instant rotation.
+## Milestone 1 — Flight Feel & Atmosphere ✅
+- ✅ Exponential atmosphere density per body (`rho0` + scale height, js/aero.js);
+  drag from cross-section (+nose streamlining); terminal velocity.
+- ✅ Reentry heating (scale-free flux `(ρ/ρ0)·(v/vOrb)³`), burn-up, plasma
+  particles + glow, camera shake; warp clamped ≤10× in atmosphere.
+- ✅ New parts: parachute (P to deploy, rips >350 m/s), heat shield, fin ring.
+  (Landing legs deferred to M3 — they want radial attachment.)
+- ✅ Effects: engine exhaust, explosions, staging puff; synthesized WebAudio
+  (engine rumble, wind roar, thunk, explosion, chute pop).
+- ✅ Torque-based rotation: angular velocity + mass-scaled authority, fins help,
+  SAS-style damping.
 
-*Acceptance:* unshielded fast reentry burns up; shielded + parachute craft
-lands intact. Harness: drag reduces apoapsis; parachute caps descent speed.
+*Acceptance met (tests/verify_aero.js):* unshielded 7.8 km/s reentry burns up
+(heat 1.00); shielded capsule survives (0.10) and lands under parachute at
+~7 m/s; drag lowers ascent apoapsis; normal ascent never overheats.
 
 ## Milestone 2 — Navigation: Maneuver Nodes & Encounters
 - Maneuver nodes on the map (prograde/retrograde/radial handles), burn timer
