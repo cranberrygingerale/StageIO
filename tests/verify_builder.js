@@ -38,8 +38,8 @@ ok(Math.abs(a.dryMass() - expectDry) < 1e-6, `dry mass sums parts (${a.dryMass()
 ok(Math.abs(a.fuelMass() - expectFuel) < 1e-6, `fuel mass sums tanks (${a.fuelMass()} kg)`);
 ok(Math.abs(a.mass() - (expectDry + expectFuel)) < 1e-6, "total mass = dry + fuel");
 
-// 2) Thrust = sum of engines; TWR at Earth surface > 1 (can lift off).
-ok(a.thrust() === 60000 + 400000, `thrust sums engines (${a.thrust()} N)`);
+// 2) Thrust is STAGE-SCOPED: only the active (lowest) stage's engine fires.
+ok(a.thrust() === 400000, `thrust = active stage's engine only (${a.thrust()} N)`);
 const gE = 3.986e14 / (6.371e6 * 6.371e6); // Earth-ish
 ok(a.twr(gE) > 1, `TWR at Earth surface > 1 (${a.twr(gE).toFixed(2)})`);
 
@@ -63,6 +63,20 @@ ok(dv > 0 && dv > singleStageDv, `staged dv (${Math.round(dv)}) beats single-sta
   const acc1 = Math.hypot(...Object.values(ship.control({ isDown: () => false }, 0.001)));
   ok(m1 < m0, `mass drops as fuel burns (${(m0/1000).toFixed(1)} t -> ${(m1/1000).toFixed(1)} t)`);
   ok(acc1 > acc0, `acceleration rises as mass drops (${acc0.toFixed(2)} -> ${acc1.toFixed(2)} m/s^2)`);
+
+  // 4b) Per-stage fuel: the pad burn drained ONLY the lower stage's tanks —
+  // the upper stage's tankS must still be full.
+  const tankS = ship.assembly.parts.find((p) => p.id === "tankS");
+  ok(Math.abs(tankS.fuel - 2250) < 1e-6, `upper-stage tank untouched during stage-1 burn (${tankS.fuel} kg)`);
+
+  // 4c) Burn stage 1 dry: thrust cuts to zero (engines starve, don't cross-feed).
+  for (let i = 0; i < 2000 && ship.assembly.hasFuel(); i++) ship.control({ isDown: () => false }, 0.05);
+  ok(ship.assembly.thrust() === 0 && !ship.isThrusting(), "dry stage => zero thrust until staged");
+
+  // 4d) Stage (G): lower stage drops, upper engine lights with its own full tank.
+  ship.stage();
+  ok(ship.assembly.thrust() === 60000 && ship.assembly.activeFuel() === 2250,
+     `after staging, upper engine fires on its own fuel (${ship.assembly.thrust()} N, ${ship.assembly.activeFuel()} kg)`);
 }
 
 // 5) Node snapping: a tank snaps flush under the pod's bottom node.

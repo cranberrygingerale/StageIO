@@ -84,7 +84,8 @@ SG.Game = class Game {
       periapsis: document.getElementById("hud-periapsis"),
       fuel: document.getElementById("hud-fuel"),
       mass: document.getElementById("hud-mass"),
-      stages: document.getElementById("hud-stages"),
+      dv: document.getElementById("hud-dv"),
+      stageList: document.getElementById("hud-stage-list"),
       warp: document.getElementById("hud-warp"),
       throttle: document.getElementById("hud-throttle"),
       throttleBar: document.getElementById("hud-throttle-bar"),
@@ -630,9 +631,10 @@ SG.Game = class Game {
     h.apoapsis.textContent = info.bound ? fmt(info.apoapsis) + " m" : "escape";
     h.periapsis.textContent = fmt(info.periapsis) + " m";
     const asm = this.ship.assembly;
-    h.fuel.textContent = Math.round(this.ship.fuelFraction() * 100) + "% (" + (asm.fuelMass() / 1000).toFixed(1) + " t)";
+    h.fuel.textContent = Math.round(this.ship.fuelFraction() * 100) + "% (" + (asm.activeFuel() / 1000).toFixed(1) + " t)";
     if (h.mass) h.mass.textContent = (asm.mass() / 1000).toFixed(1) + " t";
-    if (h.stages) h.stages.textContent = asm.stageCount() + "";
+    if (h.dv) h.dv.textContent = Math.round(asm.deltaV()).toLocaleString() + " m/s";
+    this._updateStageList(asm);
     if (h.warp) h.warp.textContent = this.cfg.warpLevels[this.warpIndex] + "×";
 
     // Throttle + engine + view mode.
@@ -648,10 +650,36 @@ SG.Game = class Game {
     let label = "SUBORBITAL", cls = "status";
     if (!this.ship.alive) { label = "CRASHED"; cls = "status crashed"; }
     else if (this.landed) label = "LANDED";
+    else if (this.ship.engineOn && this.ship.throttle > 0 && !asm.hasFuel()) {
+      // Engines starving: tell the pilot what to do about it.
+      label = asm.stageCount() > 1 ? "STAGE SPENT — PRESS G" : "OUT OF FUEL";
+      cls = "status";
+    }
     else if (!info.bound) { label = "ESCAPE TRAJECTORY"; cls = "status stable"; }
     else if (info.periapsis > 0) { label = "STABLE ORBIT"; cls = "status stable"; }
     h.status.textContent = label;
     h.status.className = cls;
+  }
+
+  // Per-stage HUD rows: fuel bar + remaining delta-v, top stage first (KSP
+  // order — the active stage is the bottom row, highlighted).
+  _updateStageList(asm) {
+    const el = this._hud.stageList;
+    if (!el) return;
+    const stats = asm.stageStats();
+    let html = "";
+    for (let i = stats.length - 1; i >= 0; i--) {
+      const s = stats[i];
+      const pct = s.capacity > 0 ? Math.max(0, Math.min(100, (s.fuel / s.capacity) * 100)) : 0;
+      html +=
+        `<div class="stage-row${i === 0 ? " active" : ""}">` +
+        `<span class="sg-n">S${i + 1}</span>` +
+        `<span class="sg-bar"><span class="sg-fill" style="width:${pct.toFixed(1)}%"></span></span>` +
+        `<span class="sg-dv">${Math.round(s.dv).toLocaleString()} m/s</span>` +
+        `</div>`;
+    }
+    // Only touch the DOM when something changed (idle coasting = no rebuilds).
+    if (html !== this._stageHtml) { el.innerHTML = html; this._stageHtml = html; }
   }
 };
 

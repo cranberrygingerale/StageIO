@@ -25,9 +25,10 @@ SG.Ship = class Ship {
   mass() { return this.assembly.mass(); }
   height() { return this.assembly.height(); }
   bottomOffset() { return this.assembly.bottomOffset(); }
+  // Fuel fraction of the ACTIVE stage (what the engines can actually drink).
   fuelFraction() {
-    const cap = this.assembly.fuelCapacity();
-    return cap > 0 ? this.assembly.fuelMass() / cap : 0;
+    const cap = this.assembly.activeFuelCapacity();
+    return cap > 0 ? this.assembly.activeFuel() / cap : 0;
   }
 
   isThrusting() {

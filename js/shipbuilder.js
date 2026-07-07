@@ -425,37 +425,23 @@ SG.ShipBuilder = class ShipBuilder {
   }
 
   // The staging stack: decouplers split the rocket into stages that fire
-  // bottom-first. Shows each stage's engines/tanks so you can plan drops.
+  // bottom-first. Shows each stage's parts + its delta-v (from SG.Assembly.stageStats,
+  // the same math flight uses). A stage with engines but no fuel gets a warning.
   _stagingHtml(a) {
-    const groups = a.stageGroups();          // bottom (fires first) -> top
-    if (!groups.length) return "";
+    const stats = a.stageStats();            // bottom (fires first) -> top
+    if (!stats.length) return "";
     let html = `<div class="sub-title" style="margin-top:12px">STAGING · fires bottom→top</div>`;
     // Show last-firing at the top of the list (KSP-style), so number = fire order.
-    for (let i = groups.length - 1; i >= 0; i--) {
-      const g = groups[i];
+    for (let i = stats.length - 1; i >= 0; i--) {
+      const s = stats[i];
       const counts = {};
-      for (const p of g) { const n = SG.Parts.get(p.id).name; counts[n] = (counts[n] || 0) + 1; }
+      for (const p of s.parts) { const n = SG.Parts.get(p.id).name; counts[n] = (counts[n] || 0) + 1; }
       const items = Object.entries(counts).map(([n, c]) => (c > 1 ? c + "× " : "") + n).join(", ");
-      const dv = this._stageDv(a, groups, i);
+      const warn = s.thrust > 0 && s.capacity === 0 ? " ⚠ no fuel" : (s.thrust === 0 && s.capacity > 0 ? " ⚠ no engine" : "");
       html += `<div class="sb-stage"><span class="sn">${i + 1}</span>` +
-              `<span class="si">${items}<span class="sdv">${Math.round(dv).toLocaleString()} m/s</span></span></div>`;
+              `<span class="si">${items}<span class="sdv">${Math.round(s.dv).toLocaleString()} m/s${warn}</span></span></div>`;
     }
     return html;
-  }
-
-  // Delta-v contributed by stage `idx` (Tsiolkovsky with mass of it + all above).
-  _stageDv(a, groups, idx) {
-    let massAbove = a.mass();
-    for (let i = 0; i < idx; i++)
-      for (const p of groups[i]) { const e = a.eff(p); massAbove -= e.dryMass + e.fuel; }
-    const g = groups[idx];
-    const fuel = g.reduce((m, p) => m + a.eff(p).fuel, 0);
-    const engs = g.filter((p) => SG.Parts.get(p.id).category === "engine");
-    const thr = engs.reduce((t, p) => t + a.eff(p).thrust, 0);
-    const flow = engs.reduce((f, p) => { const e = a.eff(p); return f + e.thrust / e.ve; }, 0);
-    const ve = flow > 0 ? thr / flow : 0;
-    const m1 = massAbove - fuel;
-    return ve > 0 && fuel > 0 && m1 > 0 ? ve * Math.log(massAbove / m1) : 0;
   }
 
   _msg(t) { const el = this.root.querySelector("#sb-msg"); if (el) el.textContent = t; }

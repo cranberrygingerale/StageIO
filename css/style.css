@@ -476,6 +476,51 @@ kbd {
 .sb-slider .sv { color: #e8f3ff; float: right; }
 .sb-slider input[type="range"] { width: 100%; accent-color: #4a8fd0; }
 
+/* ---- Per-stage HUD rows ---- */
+#hud-stage-list { margin-top: 4px; }
+
+.stage-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  opacity: 0.55;
+}
+.stage-row.active { opacity: 1; }
+
+.stage-row .sg-n {
+  flex: none;
+  width: 22px;
+  font-size: 10px;
+  color: #6f8fb5;
+}
+.stage-row.active .sg-n { color: #5dff9b; }
+
+.stage-row .sg-bar {
+  flex: 1;
+  height: 5px;
+  background: rgba(90, 150, 220, 0.15);
+  border: 1px solid rgba(90, 150, 220, 0.3);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.stage-row .sg-fill {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #4a8fd0, #5dff9b);
+}
+.stage-row.active .sg-fill { background: linear-gradient(90deg, #5dff9b, #b8ffd6); }
+
+.stage-row .sg-dv {
+  flex: none;
+  min-width: 64px;
+  text-align: right;
+  font-size: 10px;
+  color: #9fb8d6;
+  font-variant-numeric: tabular-nums;
+}
+.stage-row.active .sg-dv { color: #e8f3ff; }
+
 /* ---- Flight UI hidden outside flight (menu / build modes) ---- */
 body.no-flight-ui #hud,
 body.no-flight-ui #legend { display: none; }

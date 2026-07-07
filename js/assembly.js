@@ -39,16 +39,33 @@ SG.Assembly = class Assembly {
   fuelCapacity() { return this.parts.reduce((m, p) => m + this.eff(p).fuel, 0); }
   mass() { return this.dryMass() + this.fuelMass(); }
 
-  // --- Propulsion (all engines fire while any fuel remains) ---
-  hasFuel() { return this.fuelMass() > 1e-6; }
+  // --- Propulsion (STAGE-SCOPED: only the active — lowest — stage fires) ---
+  // Fuel lives per stage: the active stage's engines drink only its own tanks.
+  // When the active stage runs dry, thrust drops to zero — stage (G) to shed
+  // it and light the next stage's engines.
+  activeGroup() {
+    const groups = this.stageGroups();
+    return groups.length ? groups[0] : [];
+  }
+  activeEngines() {
+    return this.activeGroup().filter((p) => this.type(p).category === "engine");
+  }
+  activeFuel() {
+    return this.activeGroup().reduce((m, p) => m + (p.fuel || 0), 0);
+  }
+  activeFuelCapacity() {
+    return this.activeGroup().reduce((m, p) => m + this.eff(p).fuel, 0);
+  }
+  hasFuel() { return this.activeFuel() > 1e-6; }
+
   thrust() {
     if (!this.hasFuel()) return 0;
-    return this.engines().reduce((t, p) => t + this.eff(p).thrust, 0);
+    return this.activeEngines().reduce((t, p) => t + this.eff(p).thrust, 0);
   }
-  // Mass flow (kg/s) at full throttle across all firing engines.
+  // Mass flow (kg/s) at full throttle across the active stage's engines.
   massFlow() {
     if (!this.hasFuel()) return 0;
-    return this.engines().reduce((f, p) => {
+    return this.activeEngines().reduce((f, p) => {
       const e = this.eff(p);
       return f + e.thrust / e.ve;
     }, 0);
@@ -60,17 +77,41 @@ SG.Assembly = class Assembly {
     return m > 0 ? this.thrust() / (m * g) : 0;
   }
 
-  // Burn `kg` of propellant this step, drained bottom-up (lowest tanks first),
-  // so the lowest stage empties first — the cue to stage it away.
+  // Burn `kg` of propellant from the ACTIVE stage only, lowest tanks first.
   drainFuel(kg) {
     let need = kg;
-    const order = this.tanks().sort((a, b) => b.y - a.y); // largest y (bottom) first
+    const order = this.activeGroup()
+      .filter((p) => (p.fuel || 0) > 0)
+      .sort((a, b) => b.y - a.y);               // largest y (bottom) first
     for (const p of order) {
       if (need <= 0) break;
       const take = Math.min(p.fuel, need);
       p.fuel -= take;
       need -= take;
     }
+  }
+
+  // Per-stage stats from the CURRENT fuel state, bottom-up (index 0 = active).
+  // dv is the Tsiolkovsky delta-v remaining in that stage given the mass it
+  // still has to push (itself + everything above it).
+  stageStats() {
+    const groups = this.stageGroups();
+    let massAbove = this.mass();
+    const stats = [];
+    for (const g of groups) {
+      const dry = g.reduce((m, p) => m + this.eff(p).dryMass, 0);
+      const fuel = g.reduce((m, p) => m + (p.fuel || 0), 0);
+      const capacity = g.reduce((m, p) => m + this.eff(p).fuel, 0);
+      const engs = g.filter((p) => this.type(p).category === "engine");
+      const thr = engs.reduce((t, p) => t + this.eff(p).thrust, 0);
+      const flow = engs.reduce((f, p) => { const e = this.eff(p); return f + e.thrust / e.ve; }, 0);
+      const ve = flow > 0 ? thr / flow : 0;
+      const m1 = massAbove - fuel;
+      const dv = ve > 0 && fuel > 0 && m1 > 0 ? ve * Math.log(massAbove / m1) : 0;
+      stats.push({ parts: g, dry, fuel, capacity, thrust: thr, ve, dv });
+      massAbove -= dry + fuel;
+    }
+    return stats;
   }
 
   // --- Geometry ---
@@ -114,23 +155,10 @@ SG.Assembly = class Assembly {
     return groups;
   }
 
-  // Total delta-v (m/s), summing each stage's Tsiolkovsky contribution.
+  // Total delta-v (m/s) remaining, summing each stage's contribution. Uses
+  // current fuel, so in flight this is live "delta-v left".
   deltaV() {
-    const groups = this.stageGroups();
-    let massAbove = this.mass();
-    let dv = 0;
-    for (const g of groups) {
-      const grpDry = g.reduce((m, p) => m + this.eff(p).dryMass, 0);
-      const grpFuel = g.reduce((m, p) => m + this.eff(p).fuel, 0);
-      const engs = g.filter((p) => this.type(p).category === "engine");
-      const thr = engs.reduce((t, p) => t + this.eff(p).thrust, 0);
-      const flow = engs.reduce((f, p) => { const e = this.eff(p); return f + e.thrust / e.ve; }, 0);
-      const ve = flow > 0 ? thr / flow : 0;
-      const m0 = massAbove, m1 = massAbove - grpFuel;
-      if (ve > 0 && grpFuel > 0 && m1 > 0) dv += ve * Math.log(m0 / m1);
-      massAbove -= grpDry + grpFuel;                // jettison the whole group
-    }
-    return dv;
+    return this.stageStats().reduce((s, st) => s + st.dv, 0);
   }
 
   stageCount() { return this.stageGroups().length; }

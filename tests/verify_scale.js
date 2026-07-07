@@ -72,11 +72,10 @@ ok(eCraftTiny < eMapTiny, "craft sprite would be sub-pixel where the map marker 
   const sb = new SG.ShipBuilder(root, game.canvas);
   sb.defs = SG.Ships.default();
   const a = new SG.Assembly(sb.defs);
-  const groups = a.stageGroups();
-  let sum = 0;
-  for (let i = 0; i < groups.length; i++) sum += sb._stageDv(a, groups, i);
-  ok(Math.abs(sum - a.deltaV()) < 1e-6, `builder per-stage dv sums to total (${Math.round(sum)} = ${Math.round(a.deltaV())})`);
-  ok(groups.length === 2, `builder shows ${groups.length} stages for the stock rocket`);
+  const stats = a.stageStats();
+  const sum = stats.reduce((s, st) => s + st.dv, 0);
+  ok(Math.abs(sum - a.deltaV()) < 1e-6, `per-stage dv sums to total (${Math.round(sum)} = ${Math.round(a.deltaV())})`);
+  ok(stats.length === 2, `stageStats shows ${stats.length} stages for the stock rocket`);
 }
 
 console.log(`\n${failures === 0 ? "SCALE/STAGING CHECKS PASSED ✅" : failures + " FAILED ❌"}`);
