@@ -1,0 +1,10 @@
+{
+  "name": "stageio",
+  "version": "0.4.0",
+  "description": "KSP-inspired orbital sandbox io game — build rockets, fly a real-scale solar system.",
+  "private": true,
+  "scripts": {
+    "test": "node tests/run-all.js",
+    "start": "node tools/serve.js"
+  }
+}

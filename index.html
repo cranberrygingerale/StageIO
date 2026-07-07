@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>StageIO — Orbital Sandbox</title>
+  <link rel="stylesheet" href="css/style.css" />
+</head>
+<body>
+  <canvas id="game"></canvas>
+
+  <!-- HUD overlay (DOM, not canvas — easier to style) -->
+  <div id="hud">
+    <div class="hud-row"><span class="label">Body</span><span id="hud-body">—</span></div>
+    <div class="hud-row"><span class="label">Altitude</span><span id="hud-altitude">—</span></div>
+    <div class="hud-row"><span class="label">Speed</span><span id="hud-speed">—</span></div>
+    <div class="hud-row"><span class="label">Vertical</span><span id="hud-vspeed">—</span></div>
+    <div class="hud-row"><span class="label">Horizontal</span><span id="hud-hspeed">—</span></div>
+    <div class="hud-row"><span class="label">Apoapsis</span><span id="hud-apoapsis">—</span></div>
+    <div class="hud-row"><span class="label">Periapsis</span><span id="hud-periapsis">—</span></div>
+    <div class="hud-row"><span class="label">Fuel</span><span id="hud-fuel">—</span></div>
+    <div class="hud-row"><span class="label">Mass</span><span id="hud-mass">—</span></div>
+    <div class="hud-row"><span class="label">Stages</span><span id="hud-stages">—</span></div>
+    <div class="hud-row"><span class="label">Warp</span><span id="hud-warp">1×</span></div>
+    <div class="hud-row">
+      <span class="label">Engine</span>
+      <span><span id="hud-engine" class="off">OFF</span> &middot; <span id="hud-throttle">0%</span></span>
+    </div>
+    <div class="throttle-track"><div id="hud-throttle-bar" class="throttle-fill"></div></div>
+    <div class="hud-row"><span class="label">View</span><span id="hud-mode">CRAFT</span></div>
+    <div id="hud-status" class="status">SUBORBITAL</div>
+  </div>
+
+  <!-- Controls legend -->
+  <div id="legend">
+    <div class="legend-title">CONTROLS</div>
+    <div><kbd>Space</kbd> / <kbd>W</kbd> Engine on/off</div>
+    <div><kbd>Shift</kbd> <kbd>Ctrl</kbd> Throttle &middot; <kbd>Z</kbd> <kbd>X</kbd> Full/Cut</div>
+    <div><kbd>A</kbd> <kbd>D</kbd> / <kbd>&larr;</kbd> <kbd>&rarr;</kbd> Rotate</div>
+    <div><kbd>G</kbd> Stage &middot; <kbd>,</kbd> <kbd>.</kbd> Warp &middot; <kbd>Wheel</kbd> Zoom</div>
+    <div><kbd>M</kbd> Map/Craft &middot; <kbd>[</kbd> <kbd>]</kbd> Focus &middot; <kbd>F</kbd> Frame</div>
+    <div><kbd>V</kbd> Ship builder &middot; <kbd>B</kbd> System builder</div>
+    <div><kbd>R</kbd> Reset (relaunch)</div>
+  </div>
+
+  <!-- Ship builder scene (renders on the canvas; these are its side panels) -->
+  <div id="shipbuilder"></div>
+
+  <!-- System builder overlay (planet maker + solar system maker) -->
+  <div id="builder"></div>
+
+  <!-- Load order matters (classic scripts, shared SG namespace) -->
+  <script src="js/input.js"></script>
+  <script src="js/camera.js"></script>
+  <script src="js/physics.js"></script>
+  <script src="js/kepler.js"></script>
+  <script src="js/bodies.js"></script>
+  <script src="js/systems.js"></script>
+  <script src="js/parts.js"></script>
+  <script src="js/assembly.js"></script>
+  <script src="js/ship.js"></script>
+  <script src="js/world.js"></script>
+  <script src="js/game.js"></script>
+  <script src="js/shipbuilder.js"></script>
+  <script src="js/systembuilder.js"></script>
+</body>
+</html>
