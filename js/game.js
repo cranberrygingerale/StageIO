@@ -54,6 +54,12 @@ SG.Game = class Game {
 
     const shipDefs = SG.ShipStore.load() || SG.Ships.default();
     this.ship = new SG.Ship(this.cfg, new SG.Assembly(shipDefs));
+    // Multi-vessel world: `vessels` holds every flyable body — the player's
+    // command craft (`primary`) plus jettisoned stages tumbling as debris.
+    // `ship` is always `vessels[activeIndex]`, the one you're controlling.
+    this.primary = this.ship;
+    this.vessels = [this.ship];
+    this.activeIndex = 0;
     this.buildMode = false;        // set by the ship builder while assembling
     this.camera = new SG.Camera();
     this.camera.minZoom = this.cfg.minZoom;
@@ -79,6 +85,13 @@ SG.Game = class Game {
     this.mapZoom = null;           // lazily framed on first map entry
     this.mapTarget = null;         // body the map view is focused on
 
+    // Maneuver node: a planned burn ({t, pro, rad}) and the cached prediction
+    // (SG.Maneuver.compute) refreshed each frame. `_burnUnit` is the world-space
+    // burn direction, used to steer + to spend the node while thrusting.
+    this.node = null;
+    this._nodeInfo = null;
+    this._burnUnit = null;
+
     this._hud = {
       body: document.getElementById("hud-body"),
       altitude: document.getElementById("hud-altitude"),
@@ -97,7 +110,12 @@ SG.Game = class Game {
       throttleBar: document.getElementById("hud-throttle-bar"),
       engine: document.getElementById("hud-engine"),
       mode: document.getElementById("hud-mode"),
+      vessel: document.getElementById("hud-vessel"),
       status: document.getElementById("hud-status"),
+      nodeInfo: document.getElementById("node-info"),
+      nodeEta: document.getElementById("node-eta"),
+      nodeDv: document.getElementById("node-dv"),
+      nodeEnc: document.getElementById("node-enc"),
     };
 
     this._resize();
@@ -114,6 +132,18 @@ SG.Game = class Game {
     SG.game = this; // let the system builder reach the running game
     this.reset();
   }
+
+  // These four used to be game singletons; they now live on each vessel, so the
+  // game just proxies the ACTIVE vessel's copy (keeps HUD/trajectory/tests
+  // reading `game.dominant` etc. working unchanged).
+  get dominant() { return this.ship ? this.ship.dominant : null; }
+  set dominant(v) { if (this.ship) this.ship.dominant = v; }
+  get landed() { return this.ship ? this.ship.landed : false; }
+  set landed(v) { if (this.ship) this.ship.landed = v; }
+  get aero() { return this.ship ? this.ship.aero : null; }
+  set aero(v) { if (this.ship) this.ship.aero = v; }
+  get crashTimer() { return this.ship ? this.ship.crashTimer : 0; }
+  set crashTimer(v) { if (this.ship) this.ship.crashTimer = v; }
 
   _resize() {
     const dpr = window.devicePixelRatio || 1;
@@ -147,8 +177,9 @@ SG.Game = class Game {
   }
 
   // Install a freshly-built ship design and put it on the pad (from the builder).
+  // Always targets the primary craft — reset() rebuilds the vessel list from it.
   launchShip(defs) {
-    this.ship.setAssembly(new SG.Assembly(defs));
+    this.primary.setAssembly(new SG.Assembly(defs));
     this.buildMode = false;
     this.paused = false;
     this.reset();
@@ -165,7 +196,15 @@ SG.Game = class Game {
   reset() {
     this.world.update(this.simTime);
     const home = this.world.system.homeBody();
-    this.ship.resetToPad(home);
+    // Relaunch discards any debris: the world is just the primary craft again.
+    const primary = this.primary || this.ship;
+    primary.isCraft = true;
+    primary.debris = false;
+    primary.resetToPad(home);
+    this.primary = primary;
+    this.vessels = [primary];
+    this.activeIndex = 0;
+    this.ship = primary;
     this.dominant = home;
     this.camera.snapTo(this.ship.x, this.ship.y);
     // Craft view is ship-relative: default zoom frames the CRAFT (not the whole
@@ -181,6 +220,7 @@ SG.Game = class Game {
     this.crashTimer = 0;
     this.landed = false;
     this.aero = null;
+    this._clearNode();
     if (SG.Effects) SG.Effects.clear();
   }
 
@@ -197,6 +237,162 @@ SG.Game = class Game {
       this.camera.zoom = this.craftZoom;
       this.camera.snapTo(this.ship.x, this.ship.y);
     }
+  }
+
+  // --- Multiple vessels -------------------------------------------------------
+
+  // Hand control to the next/previous LIVE vessel (command craft or debris).
+  switchVessel(dir) {
+    const n = this.vessels.length;
+    if (n <= 1) return;
+    let i = this.activeIndex;
+    for (let k = 0; k < n; k++) {
+      i = (i + dir + n) % n;
+      if (this.vessels[i].alive) break;
+    }
+    if (i === this.activeIndex) return;
+    this.activeIndex = i;
+    this.ship = this.vessels[i];
+    this.warpIndex = 0;                     // new frame of reference; drop warp
+    this.craftZoom = this.camera.zoom;      // keep the current zoom
+    this.camera.snapTo(this.ship.x, this.ship.y);
+    this._clearNode();                      // a node belongs to one vessel's orbit
+  }
+
+  // --- Maneuver node ----------------------------------------------------------
+
+  // Create a node at the next periapsis (or clear the existing one). Needs a
+  // closed orbit to plan from — no node from the pad or an escape trajectory.
+  _toggleNode() {
+    if (this.node) { this._clearNode(); return; }
+    const s = this.ship;
+    if (!s.alive || s.landed) return;
+    const dom = this.dominant;
+    const el = SG.Kepler.elements(s.x - dom.x, s.y - dom.y, s.vx - dom.vx, s.vy - dom.vy, dom.mu);
+    if (!el.bound) return;
+    this.node = SG.Maneuver.makeNode(this);
+  }
+
+  _clearNode() { this.node = null; this._nodeInfo = null; this._burnUnit = null; }
+
+  // Held-key tuning of the planned burn (continuous, like throttle). Δv steps
+  // start fine and grow with the burn size; the node slides in time relative to
+  // the predicted orbit's period.
+  _editNode(dt) {
+    const n = this.node;
+    if (!n) return;
+    const dv = Math.hypot(n.pro, n.rad);
+    const rate = (8 + 0.5 * dv);            // m/s per second held
+    if (SG.Input.isDown("nodeProPlus")) n.pro += rate * dt;
+    if (SG.Input.isDown("nodeProMinus")) n.pro -= rate * dt;
+    if (SG.Input.isDown("nodeRadPlus")) n.rad += rate * dt;
+    if (SG.Input.isDown("nodeRadMinus")) n.rad -= rate * dt;
+    let per = 600;
+    if (this._nodeInfo && this._nodeInfo.postEl && this._nodeInfo.postEl.n > 0)
+      per = (Math.PI * 2) / this._nodeInfo.postEl.n;
+    const trate = per / 12;                 // sweep the orbit in ~12s of holding
+    if (SG.Input.isDown("nodeTimePlus")) n.t += trate * dt;
+    if (SG.Input.isDown("nodeTimeMinus")) n.t = Math.max(this.simTime + 1, n.t - trate * dt);
+  }
+
+  // Spend the node as the active vessel thrusts along the planned direction:
+  // shrink the Δv vector by the progress made, and delete it once (nearly) done.
+  _consumeNode(dvx, dvy) {
+    const dir = this._burnUnit, n = this.node;
+    if (!dir || !n) return;
+    const total = Math.hypot(n.pro, n.rad);
+    if (total < 1e-6) return;
+    const along = dvx * dir.x + dvy * dir.y;  // component along the planned burn
+    if (along <= 0) return;                    // pointing the wrong way — no credit
+    const f = Math.max(0, total - along) / total;
+    n.pro *= f; n.rad *= f;
+    if (Math.hypot(n.pro, n.rad) < 2) this._clearNode();
+  }
+
+  // Turn a jettisoned stage (`removed` placed parts) into an independent debris
+  // vessel that keeps flying — feeling gravity and drag — so you watch it drop
+  // away behind you. `preCom` is the parent's centre of mass BEFORE the drop.
+  _spawnDebris(ship, removed, preCom) {
+    if (!removed || !removed.length) return;
+
+    const asm = new SG.Assembly(
+      removed.map((p) => ({ id: p.id, x: p.x, y: p.y, sx: p.sx, sy: p.sy }))
+    );
+    // The Assembly constructor tops tanks off; keep the fuel they actually had.
+    for (let i = 0; i < asm.parts.length; i++) asm.parts[i].fuel = removed[i].fuel || 0;
+
+    const d = new SG.Ship(this.cfg, asm);
+    d.isCraft = false;
+    d.debris = true;
+    d.angle = ship.angle;
+    d.angVel = ship.angVel + (Math.random() - 0.5) * 0.7;   // a little tumble
+    d.heat = ship.heat;
+    d.dominant = ship.dominant || this.world.system.dominantBody(ship.x, ship.y);
+    d.alive = true;
+    d.landed = false;
+
+    // Place the debris COM at the world spot it occupied inside the stack. The
+    // renderer maps a build-space delta (relative to COM) into the world by
+    // rotating it by angle+π/2, so we invert that here.
+    const dcom = asm.com();
+    const bx = dcom.x - preCom.x, by = dcom.y - preCom.y;
+    const th = ship.angle + Math.PI / 2;
+    const cos = Math.cos(th), sin = Math.sin(th);
+    d.x = ship.x + (bx * cos - by * sin);
+    d.y = ship.y + (bx * sin + by * cos);
+
+    // Decoupler springs kick the spent stage aft (down the stack) and give the
+    // remaining craft a much gentler forward nudge.
+    const sep = 4 + Math.random() * 3;
+    const tail = ship.angle + Math.PI;
+    d.vx = ship.vx + Math.cos(tail) * sep;
+    d.vy = ship.vy + Math.sin(tail) * sep;
+    ship.vx += Math.cos(ship.angle) * sep * 0.12;
+    ship.vy += Math.sin(ship.angle) * sep * 0.12;
+
+    this.vessels.push(d);
+
+    // Cap the vessel count: drop the oldest debris (never the primary/active).
+    const MAX = 14;
+    while (this.vessels.length > MAX) {
+      const idx = this.vessels.findIndex(
+        (v, i) => v !== this.primary && i !== this.activeIndex
+      );
+      if (idx < 0) break;
+      this.vessels.splice(idx, 1);
+      if (idx < this.activeIndex) this.activeIndex--;
+    }
+    this.ship = this.vessels[this.activeIndex];
+  }
+
+  // Remove burnt-up / crashed debris once its explosion has played. The primary
+  // craft is never culled here — its death runs the relaunch flow instead.
+  _cullVessels() {
+    const active = this.vessels[this.activeIndex];
+    const kept = this.vessels.filter(
+      (v) => v === this.primary || v.alive || v.crashTimer <= 1.2
+    );
+    if (kept.length === this.vessels.length) return;
+    this.vessels = kept;
+    let idx = kept.indexOf(active);
+    if (idx < 0) {                          // the vessel we were flying is gone
+      idx = kept.indexOf(this.primary);
+      if (idx < 0) idx = 0;
+      this.camera.snapTo(kept[idx].x, kept[idx].y);
+    }
+    this.activeIndex = idx;
+    this.ship = kept[idx];
+  }
+
+  // Destroy a vessel (crash or burn-up): explosion + shake, sound only for the
+  // one you're flying so a shed booster burning up doesn't blast your speakers.
+  _killVessel(v, isActive, burned) {
+    v.alive = false;
+    v.burnedUp = burned;
+    v.crashTimer = 0;
+    if (isActive) this.warpIndex = 0;
+    if (SG.Effects) SG.Effects.explosion(v.x, v.y, v.assembly.height());
+    if (SG.Audio && isActive) SG.Audio.explosion();
   }
 
   // Cycle the map focus target through the system's bodies.
@@ -284,23 +480,41 @@ SG.Game = class Game {
     if (SG.Input.isDown("zoomIn")) this.camera.zoomBy(Math.pow(this.cfg.zoomKeyRate, frameTime));
     if (SG.Input.isDown("zoomOut")) this.camera.zoomBy(Math.pow(this.cfg.zoomKeyRate, -frameTime));
 
+    // Live tuning of the planned burn (held keys).
+    if (!this.paused) this._editNode(frameTime);
+
     // A running engine forces warp back to 1x (can't warp under acceleration).
     if (this.ship.isThrusting()) this.warpIndex = 0;
 
     // --- Advance the simulation (numeric physics warp OR analytic rails warp) ---
-    if (!this.paused) this._advanceWorld(frameTime);
+    // (_stepVessel spends the node while thrusting, using last frame's burn dir.)
+    if (!this.paused) {
+      this._advanceWorld(frameTime);
+      this._cullVessels();                       // sweep up spent debris
+    }
+
+    // Refresh the maneuver prediction for drawing/HUD and next-frame execution.
+    this._nodeInfo = this.node ? SG.Maneuver.compute(this) : null;
+    this._burnUnit = this._nodeInfo && this._nodeInfo.burnUnit ? this._nodeInfo.burnUnit : null;
 
     // Particle effects + sound (real-time; skip spawning at high warp).
     if (SG.Effects) {
       const warp = this.cfg.warpLevels[this.warpIndex];
-      if (!this.paused && warp <= 4 && this.ship.alive) {
-        if (this.ship.thrusting) SG.Effects.emitExhaust(this.ship, frameTime);
-        if (this.aero && this.aero.qNorm > SG.Aero.PLASMA_THRESHOLD)
-          SG.Effects.emitPlasma(this.ship, this.dominant, this.aero.qNorm, frameTime);
+      if (!this.paused && warp <= 4) {
+        if (this.ship.alive && this.ship.thrusting) SG.Effects.emitExhaust(this.ship, frameTime);
+        // Reentry plasma for EVERY vessel — a shed booster streaking in looks great.
+        for (const v of this.vessels) {
+          if (v.alive && v.aero && v.aero.qNorm > SG.Aero.PLASMA_THRESHOLD)
+            SG.Effects.emitPlasma(v, v.dominant, v.aero.qNorm, frameTime);
+        }
       }
       SG.Effects.update(frameTime);
     }
     if (SG.Audio) SG.Audio.update(this.ship, this.aero);
+
+    // The player's command craft dying triggers the relaunch flow (debris dying
+    // is just cleaned up by _cullVessels above).
+    if (!this.primary.alive && this.primary.crashTimer > 1.3) { this.reset(); return; }
 
     // Camera: craft view tracks the ship; map view stays on its focus target.
     // We SNAP (not ease) to the ship: it can be moving at tens of km/s in the
@@ -327,8 +541,12 @@ SG.Game = class Game {
         case "throttleMax": this.ship.setThrottle(1); break;
         case "throttleZero": this.ship.setThrottle(0); break;
         case "stage": {
+          // COM of the whole stack BEFORE the drop, so the debris lines up with
+          // where the lower stage was on screen a moment ago.
+          const preCom = this.ship.assembly.com();
           const removed = this.ship.stage();
           if (removed) {
+            this._spawnDebris(this.ship, removed, preCom);
             if (SG.Audio) SG.Audio.thunk();
             if (SG.Effects) SG.Effects.stagePuff(this.ship);
           }
@@ -342,8 +560,11 @@ SG.Game = class Game {
           break;
         }
         case "toggleMap": this.toggleView(); break;
-        case "focusNext": if (this.viewMode === "map") this.cycleFocus(1); break;
-        case "focusPrev": if (this.viewMode === "map") this.cycleFocus(-1); break;
+        // In map view [ ] cycle the focused body; in craft view they switch
+        // which vessel you're flying (command craft ⇄ jettisoned debris).
+        case "focusNext": if (this.viewMode === "map") this.cycleFocus(1); else this.switchVessel(1); break;
+        case "focusPrev": if (this.viewMode === "map") this.cycleFocus(-1); else this.switchVessel(-1); break;
+        case "nodeToggle": this._toggleNode(); break;
         case "reset": this.reset(); break;
         case "frameSystem":
           if (this.viewMode === "map") this.frameMap();
@@ -429,122 +650,116 @@ SG.Game = class Game {
   }
 
   _railsSub(dt) {
-    const ship = this.ship;
-    if (!ship.alive) {                       // safety: shouldn't normally happen
-      this.simTime += dt;
-      this.world.update(this.simTime);
-      this.crashTimer += dt;
-      if (this.crashTimer > 1.3) this.reset();
-      return;
+    const vs = this.vessels;
+    // Plan each live vessel's move against its CURRENT dominant body, before the
+    // world advances (so the analytic step is relative to the old body position).
+    const plans = [];
+    for (const v of vs) {
+      if (!v.alive) { v.crashTimer += dt; continue; }
+      const dom = this.world.system.dominantBody(v.x, v.y);
+      const relx = v.x - dom.x, rely = v.y - dom.y;
+      if (v.landed) { plans.push({ v, dom, relx, rely, mode: "pin" }); continue; }
+      const el = SG.Kepler.elements(relx, rely, v.vx - dom.vx, v.vy - dom.vy, dom.mu);
+      if (el.bound) plans.push({ v, dom, ns: SG.Kepler.propagate(el, dom.mu, dt), mode: "orbit" });
+      else plans.push({ v, dom, relx, rely, mode: "pin" }); // unbound debris: coast with body (rare)
     }
-
-    const dom = this.world.system.dominantBody(ship.x, ship.y);
-
-    if (this.landed) {
-      // Stay pinned to the same spot on the (non-rotating) body as it moves.
-      const relx = ship.x - dom.x, rely = ship.y - dom.y;
-      this.simTime += dt;
-      this.world.update(this.simTime);
-      ship.x = dom.x + relx; ship.y = dom.y + rely;
-      ship.vx = dom.vx; ship.vy = dom.vy;
-      this.dominant = dom;
-      return;
-    }
-
-    // Elements relative to the dominant body, propagated analytically.
-    const el = SG.Kepler.elements(
-      ship.x - dom.x, ship.y - dom.y, ship.vx - dom.vx, ship.vy - dom.vy, dom.mu
-    );
-    if (!el.bound) { this._numericAdvance(dt); return; }   // guarded upstream, but safe
-    const ns = SG.Kepler.propagate(el, dom.mu, dt);
 
     this.simTime += dt;
-    this.world.update(this.simTime);          // dom moves to its new position
-    ship.x = dom.x + ns.x; ship.y = dom.y + ns.y;
-    ship.vx = dom.vx + ns.vx; ship.vy = dom.vy + ns.vy;
+    this.world.update(this.simTime);          // bodies move to their new positions
 
-    // Dipped into an atmosphere while on rails: drop to physics warp so drag
-    // takes over next frame (rails ignores it).
-    const altNow = Math.hypot(ship.x - dom.x, ship.y - dom.y) - dom.radius;
-    if (SG.Aero.inAtmosphere(dom, altNow))
-      this.warpIndex = Math.min(this.warpIndex, this._atmoWarpIndex());
-
-    // Surface impact while warping (e.g. a warped suborbital arc).
-    const ddx = ship.x - dom.x, ddy = ship.y - dom.y;
-    const dd = Math.hypot(ddx, ddy);
-    const surf = dom.radius + this.ship.bottomOffset();
-    if (dd < surf) {
-      const rvx = ship.vx - dom.vx, rvy = ship.vy - dom.vy;
-      if (Math.hypot(rvx, rvy) < this.cfg.landingSpeed) {
-        const nx = ddx / dd, ny = ddy / dd;
-        ship.x = dom.x + nx * surf; ship.y = dom.y + ny * surf;
-        ship.vx = dom.vx; ship.vy = dom.vy;
-        this.landed = true;
-      } else {
-        ship.alive = false; this.crashTimer = 0; this.warpIndex = 0;
-        if (SG.Effects) SG.Effects.explosion(ship.x, ship.y, ship.assembly.height());
-        if (SG.Audio) SG.Audio.explosion();
+    for (const pl of plans) {
+      const { v, dom } = pl;
+      if (pl.mode === "pin") {
+        // Landed / coasting: stay put relative to the (non-rotating) body.
+        v.x = dom.x + pl.relx; v.y = dom.y + pl.rely;
+        v.vx = dom.vx; v.vy = dom.vy;
+        v.dominant = dom;
+        continue;
       }
+      v.x = dom.x + pl.ns.x; v.y = dom.y + pl.ns.y;
+      v.vx = dom.vx + pl.ns.vx; v.vy = dom.vy + pl.ns.vy;
+
+      // Dipped into an atmosphere while on rails: drop to physics warp so drag
+      // takes over next frame (rails ignores it).
+      const altNow = Math.hypot(v.x - dom.x, v.y - dom.y) - dom.radius;
+      if (SG.Aero.inAtmosphere(dom, altNow))
+        this.warpIndex = Math.min(this.warpIndex, this._atmoWarpIndex());
+
+      // Surface impact while warping (e.g. a warped suborbital arc).
+      const ddx = v.x - dom.x, ddy = v.y - dom.y;
+      const dd = Math.hypot(ddx, ddy);
+      const surf = dom.radius + v.bottomOffset();
+      if (dd < surf) {
+        const rvx = v.vx - dom.vx, rvy = v.vy - dom.vy;
+        if (Math.hypot(rvx, rvy) < this.cfg.landingSpeed) {
+          const nx = ddx / dd, ny = ddy / dd;
+          v.x = dom.x + nx * surf; v.y = dom.y + ny * surf;
+          v.vx = dom.vx; v.vy = dom.vy;
+          v.landed = true;
+        } else {
+          this._killVessel(v, v === this.ship, false);
+        }
+      }
+      // Re-resolve the governing body (handles SOI transitions for the HUD).
+      v.dominant = this.world.system.dominantBody(v.x, v.y);
     }
-    // Re-resolve the governing body (handles SOI transitions for the HUD).
-    this.dominant = this.world.system.dominantBody(ship.x, ship.y);
   }
 
   _step(dt) {
-    const ship = this.ship;
+    const vs = this.vessels;
+    for (let k = 0; k < vs.length; k++) this._stepVessel(vs[k], dt, k === this.activeIndex);
+  }
 
-    if (!ship.alive) {
-      this.crashTimer += dt;
-      if (this.crashTimer > 1.3) this.reset();
-      return;
+  // Advance ONE vessel by dt under gravity + drag. `isActive` gets pilot input;
+  // debris just coast (and tumble). Death is handled via _killVessel.
+  _stepVessel(v, dt, isActive) {
+    if (!v.alive) { v.crashTimer += dt; return; }
+
+    // Gravity comes from whichever body's SOI the vessel is inside.
+    const dom = this.world.system.dominantBody(v.x, v.y);
+    v.dominant = dom;
+
+    let thrust;
+    if (isActive) {
+      thrust = v.control(SG.Input, dt);
+      // Executing a maneuver: spend the node by the Δv burnt along its direction.
+      if (this.node && this._burnUnit && v.thrusting)
+        this._consumeNode(thrust.ax * dt, thrust.ay * dt);
+    } else {
+      thrust = { ax: 0, ay: 0 };
+      v.angle += v.angVel * dt;             // debris coasts its spin
+      v.angVel *= Math.exp(-0.1 * dt);      // ...settling very slowly
     }
-
-    // Gravity comes from whichever body's SOI the ship is inside.
-    const dom = this.world.system.dominantBody(ship.x, ship.y);
-    this.dominant = dom;
-
-    const thrust = ship.control(SG.Input, dt);
 
     // Atmospheric drag + reentry heating (adds to the accel for this step).
-    const aero = SG.Aero.step(ship, dom, dt);
-    this.aero = aero;
+    const aero = SG.Aero.step(v, dom, dt);
+    v.aero = aero;
     thrust.ax += aero.ax;
     thrust.ay += aero.ay;
-    if (aero.burning) {
-      ship.alive = false;
-      ship.burnedUp = true;
-      this.crashTimer = 0;
-      this.warpIndex = 0;
-      if (SG.Effects) SG.Effects.explosion(ship.x, ship.y, this.ship.assembly.height());
-      if (SG.Audio) SG.Audio.explosion();
-      return;
-    }
+    if (aero.burning) { this._killVessel(v, isActive, true); return; }
 
-    SG.Physics.integrate(ship, dom, dt, thrust);
+    SG.Physics.integrate(v, dom, dt, thrust);
 
     // --- Surface interaction with the dominant body ---
-    const dx = ship.x - dom.x, dy = ship.y - dom.y;
+    const dx = v.x - dom.x, dy = v.y - dom.y;
     const dist = Math.hypot(dx, dy);
-    const surface = dom.radius + this.ship.bottomOffset();
+    const surface = dom.radius + v.bottomOffset();
     if (dist < surface) {
       // Velocity relative to the (possibly moving) body.
-      const rvx = ship.vx - dom.vx, rvy = ship.vy - dom.vy;
+      const rvx = v.vx - dom.vx, rvy = v.vy - dom.vy;
       const relSpeed = Math.hypot(rvx, rvy);
       if (relSpeed < this.cfg.landingSpeed) {
         const nx = dx / dist, ny = dy / dist;
-        ship.x = dom.x + nx * surface;
-        ship.y = dom.y + ny * surface;
-        ship.vx = dom.vx;                 // rest relative to the body
-        ship.vy = dom.vy;
-        this.landed = true;
+        v.x = dom.x + nx * surface;
+        v.y = dom.y + ny * surface;
+        v.vx = dom.vx;                      // rest relative to the body
+        v.vy = dom.vy;
+        v.landed = true;
       } else {
-        ship.alive = false;
-        this.crashTimer = 0;
-        if (SG.Effects) SG.Effects.explosion(ship.x, ship.y, ship.assembly.height());
-        if (SG.Audio) SG.Audio.explosion();
+        this._killVessel(v, isActive, false);
       }
     } else {
-      this.landed = false;
+      v.landed = false;
     }
   }
 
@@ -567,7 +782,11 @@ SG.Game = class Game {
     this._drawTrajectory(ctx, false);
     this._drawVelocityVector(ctx);
     if (SG.Effects) SG.Effects.draw(ctx, this.camera);
-    this.ship.draw(ctx, this.camera, dt);      // true world scale (zoom-relative)
+    // Debris first, the vessel you're flying on top (true world scale).
+    for (const v of this.vessels) if (v !== this.ship) v.draw(ctx, this.camera, dt);
+    this.ship.draw(ctx, this.camera, dt);
+    this._drawActiveMarker(ctx, false);
+    this._drawManeuver(ctx, false);
     ctx.restore();
   }
 
@@ -578,8 +797,115 @@ SG.Game = class Game {
     if (focus !== this.dominant) this.world.drawSOI(ctx, this.camera, this.dominant);
     this.world.drawBodies(ctx, this.camera, { highlight: focus.name, map: true });
     this._drawTrajectory(ctx, true);          // includes Ap/Pe markers
+    this._drawManeuver(ctx, true);            // predicted orbit + node + encounter
+    for (const v of this.vessels) if (v !== this.ship) v.draw(ctx, this.camera, dt, this.cfg.minShipPx);
     this.ship.draw(ctx, this.camera, dt, this.cfg.minShipPx);  // fixed-size marker
+    this._drawActiveMarker(ctx, true);
     this._drawFocusLabel(ctx, focus);
+  }
+
+  // The maneuver node: in MAP view the full predicted orbit + node handle +
+  // encounter marker; in CRAFT view just a burn-direction cue to point at.
+  _drawManeuver(ctx, map) {
+    const info = this._nodeInfo;
+    if (!info) return;
+    const dom = info.dom;
+    const anchor = this.camera.worldToScreen(dom.x, dom.y);  // dom = ellipse focus
+
+    if (!map) {
+      // Craft view: a magenta burn-direction pip beyond the prograde marker.
+      if (!info.valid || info.dvRemaining < 0.1 || !this.ship.alive) return;
+      const bu = info.burnUnit;
+      const s = this.camera.worldToScreen(this.ship.x, this.ship.y);
+      const len = 78, ex = s.x + bu.x * len, ey = s.y + bu.y * len;
+      ctx.save();
+      ctx.strokeStyle = "rgba(210,130,255,0.9)";
+      ctx.fillStyle = "rgba(210,130,255,0.9)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.moveTo(s.x, s.y); ctx.lineTo(ex, ey); ctx.stroke();
+      ctx.beginPath(); ctx.arc(ex, ey, 6, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.arc(ex, ey, 2, 0, Math.PI * 2); ctx.fill();
+      ctx.restore();
+      return;
+    }
+
+    ctx.save();
+    // Predicted orbit (magenta dashed), anchored on the dominant body.
+    if (info.valid && info.postEl && info.postEl.bound) {
+      const pts = SG.Kepler.sampleEllipse(info.postEl, dom.mu, 180);
+      ctx.setLineDash([5, 5]);
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = "rgba(210,130,255,0.65)";
+      ctx.beginPath();
+      for (let i = 0; i < pts.length; i++) {
+        const p = this.camera.worldToScreen(dom.x + pts[i].x, dom.y + pts[i].y);
+        i === 0 ? ctx.moveTo(p.x, p.y) : ctx.lineTo(p.x, p.y);
+      }
+      ctx.stroke();
+    }
+
+    // Node handle on the current orbit.
+    if (info.nodeRel) {
+      const np = this.camera.worldToScreen(dom.x + info.nodeRel.x, dom.y + info.nodeRel.y);
+      ctx.setLineDash([]);
+      ctx.strokeStyle = "rgba(230,170,255,0.95)";
+      ctx.fillStyle = "rgba(210,130,255,0.9)";
+      ctx.lineWidth = 1.5;
+      ctx.beginPath(); ctx.arc(np.x, np.y, 6, 0, Math.PI * 2); ctx.stroke();
+      const bu = info.burnUnit;
+      ctx.beginPath();
+      ctx.moveTo(np.x, np.y);
+      ctx.lineTo(np.x + bu.x * 22, np.y + bu.y * 22);
+      ctx.stroke();
+    }
+
+    // Encounter: mark where the predicted orbit meets the moon's SOI, and ghost
+    // the moon at that future moment so the intercept geometry is obvious.
+    if (info.encounter) {
+      const enc = info.encounter;
+      const gp = this.camera.worldToScreen(dom.x + enc.bodyRel.x, dom.y + enc.bodyRel.y);
+      const soiR = enc.body.soi * this.camera.zoom;
+      ctx.setLineDash([2, 6]);
+      ctx.strokeStyle = "rgba(120,235,165,0.7)";
+      ctx.lineWidth = 1;
+      if (soiR > 3 && soiR < 40000) { ctx.beginPath(); ctx.arc(gp.x, gp.y, soiR, 0, Math.PI * 2); ctx.stroke(); }
+      const ep = this.camera.worldToScreen(dom.x + enc.shipRel.x, dom.y + enc.shipRel.y);
+      ctx.setLineDash([]);
+      ctx.fillStyle = "rgba(120,235,165,0.95)";
+      ctx.strokeStyle = "rgba(120,235,165,0.95)";
+      ctx.beginPath();                          // diamond
+      ctx.moveTo(ep.x, ep.y - 6); ctx.lineTo(ep.x + 6, ep.y);
+      ctx.lineTo(ep.x, ep.y + 6); ctx.lineTo(ep.x - 6, ep.y);
+      ctx.closePath(); ctx.stroke();
+      ctx.font = "11px Consolas, monospace";
+      ctx.textAlign = "left";
+      ctx.fillText(`${enc.body.name} intercept`, ep.x + 9, ep.y - 6);
+    }
+    ctx.restore();
+  }
+
+  // Corner brackets around the vessel you're currently flying (only meaningful
+  // once there's more than one in the world).
+  _drawActiveMarker(ctx, map) {
+    if (this.vessels.length <= 1 || !this.ship.alive) return;
+    const s = this.camera.worldToScreen(this.ship.x, this.ship.y);
+    const h = Math.max(this.ship.height(), 1);
+    const scale = map ? Math.max(this.camera.zoom, this.cfg.minShipPx / h) : this.camera.zoom;
+    const r = Math.max(h * scale * 0.75, 16);
+    const k = r * 0.35;
+    ctx.save();
+    ctx.strokeStyle = "rgba(120,235,165,0.9)";
+    ctx.lineWidth = 1.5;
+    const corners = [[-1, -1], [1, -1], [-1, 1], [1, 1]];
+    for (const [cx, cy] of corners) {
+      const x = s.x + cx * r, y = s.y + cy * r;
+      ctx.beginPath();
+      ctx.moveTo(x - cx * k, y);
+      ctx.lineTo(x, y);
+      ctx.lineTo(x, y - cy * k);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 
   _drawFocusLabel(ctx, focus) {
@@ -734,6 +1060,12 @@ SG.Game = class Game {
       h.engine.className = this.ship.engineOn ? "on" : "off";
     }
     if (h.mode) h.mode.textContent = this.viewMode === "map" ? "MAP" : "CRAFT";
+    if (h.vessel) {
+      const total = this.vessels.length;
+      const kind = this.ship === this.primary ? "Command" : "Debris";
+      h.vessel.textContent = total > 1 ? `${this.activeIndex + 1}/${total} · ${kind}` : "1/1";
+    }
+    this._updateNodeHud();
 
     let label = "SUBORBITAL", cls = "status";
     if (!this.ship.alive) {
@@ -753,6 +1085,34 @@ SG.Game = class Game {
     else if (info.periapsis > 0) { label = "STABLE ORBIT"; cls = "status stable"; }
     h.status.textContent = label;
     h.status.className = cls;
+  }
+
+  // Maneuver-node HUD block: shown only while a node exists (time-to-node, Δv,
+  // and whether the plotted orbit intercepts a moon).
+  _updateNodeHud() {
+    const h = this._hud;
+    if (!h.nodeInfo) return;
+    const info = this._nodeInfo;
+    if (!info) { h.nodeInfo.style.display = "none"; return; }
+    h.nodeInfo.style.display = "";
+    if (h.nodeEta) h.nodeEta.textContent = this._fmtDuration(info.dt);
+    if (h.nodeDv) h.nodeDv.textContent = Math.round(info.dvRemaining).toLocaleString() + " m/s";
+    if (h.nodeEnc) {
+      if (!info.valid) { h.nodeEnc.textContent = "need an orbit"; h.nodeEnc.style.color = "#ffb454"; }
+      else if (info.encounter) {
+        h.nodeEnc.textContent = info.encounter.body.name + " ✓";
+        h.nodeEnc.style.color = "#78eba5";
+      } else { h.nodeEnc.textContent = "none"; h.nodeEnc.style.color = ""; }
+    }
+  }
+
+  // Seconds -> compact "1h 03m" / "4m 12s" / "38s".
+  _fmtDuration(s) {
+    s = Math.max(0, Math.round(s));
+    const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
+    if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+    if (m > 0) return `${m}m ${String(sec).padStart(2, "0")}s`;
+    return `${sec}s`;
   }
 
   // Per-stage HUD rows: fuel bar + remaining delta-v, top stage first (KSP

@@ -15,7 +15,7 @@ let stored = {};
 global.localStorage = { getItem: (k) => stored[k] || null, setItem: (k, v) => (stored[k] = v), removeItem: (k) => delete stored[k] };
 global.document = { getElementById: () => ({ getContext: () => ctx, style: {}, classList: { add() {}, remove() {}, toggle() {} }, addEventListener: () => {}, getBoundingClientRect: () => ({ left: 0, top: 0 }), querySelector: () => null, querySelectorAll: () => [], set innerHTML(v) {}, set textContent(v) {} }) };
 function load(f) { new Function("window", fs.readFileSync(path.join(ROOT, f), "utf8"))(global); }
-["input", "camera", "physics", "aero", "kepler", "bodies", "systems", "parts", "assembly", "ship", "world", "game", "shipbuilder", "systembuilder"].forEach((m) => load("js/" + m + ".js"));
+["input", "camera", "physics", "aero", "kepler", "maneuver", "bodies", "systems", "parts", "assembly", "ship", "world", "game", "shipbuilder", "systembuilder"].forEach((m) => load("js/" + m + ".js"));
 const SG = global.SG;
 let failures = 0;
 const ok = (c, m) => { console.log(`${c ? "PASS ✅" : "FAIL ❌"}  ${m}`); if (!c) failures++; };

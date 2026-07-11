@@ -26,6 +26,14 @@ SG.Input = (function () {
       case "KeyX":       return "throttleZero";   // cut throttle
       case "KeyG":       return "stage";          // jettison the lowest stage
       case "KeyP":       return "chute";          // deploy parachute
+      // --- Maneuver node (plan & tune a burn) ---
+      case "KeyN":       return "nodeToggle";     // create / clear the node
+      case "KeyL":       return "nodeProPlus";    // held: prograde Δv +
+      case "KeyJ":       return "nodeProMinus";   // held: prograde Δv −
+      case "KeyI":       return "nodeRadPlus";     // held: radial-out Δv +
+      case "KeyK":       return "nodeRadMinus";    // held: radial-in Δv −
+      case "KeyO":       return "nodeTimePlus";    // held: slide node later
+      case "KeyU":       return "nodeTimeMinus";   // held: slide node earlier
       // --- View / camera / time ---
       case "KeyM":       return "toggleMap";
       case "BracketRight": return "focusNext";   // map: cycle focus target

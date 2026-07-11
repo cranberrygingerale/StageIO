@@ -21,6 +21,16 @@ SG.Ship = class Ship {
     this.chuteDeployed = false;
     this.burnedUp = false;
     this._flame = 0;
+
+    // Per-vessel simulation state (the game owns a LIST of vessels — the
+    // command craft plus any jettisoned stages still tumbling through the
+    // world). These used to live on the game as singletons.
+    this.landed = false;            // resting on the dominant body's surface
+    this.dominant = null;           // SOI body currently governing this vessel
+    this.aero = null;               // last SG.Aero.step() result (drag/heat/HUD)
+    this.crashTimer = 0;            // seconds since death (for cleanup / relaunch)
+    this.isCraft = true;            // the player's command craft (vs debris)
+    this.debris = false;            // a jettisoned stage flying on its own
   }
 
   // Install a fresh runtime copy of a design (full tanks) for a new flight.
@@ -61,6 +71,10 @@ SG.Ship = class Ship {
     this.heat = 0;
     this.chuteDeployed = false;
     this.burnedUp = false;
+    this.landed = false;
+    this.aero = null;
+    this.crashTimer = 0;
+    this.dominant = body;
   }
 
   // Deploy parachutes (P). Only opens if fitted, not already out, and slow

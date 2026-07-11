@@ -25,7 +25,7 @@ global.document = {
 };
 
 function load(f) { new Function("window", fs.readFileSync(path.join(ROOT, f), "utf8"))(global); }
-["input", "camera", "physics", "aero", "kepler", "bodies", "systems", "parts", "assembly", "ship", "world", "game"].forEach((m) => load("js/" + m + ".js"));
+["input", "camera", "physics", "aero", "kepler", "maneuver", "bodies", "systems", "parts", "assembly", "ship", "world", "game"].forEach((m) => load("js/" + m + ".js"));
 
 const SG = global.SG;
 let failures = 0;

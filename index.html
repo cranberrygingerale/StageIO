@@ -33,6 +33,12 @@
     </div>
     <div class="throttle-track"><div id="hud-throttle-bar" class="throttle-fill"></div></div>
     <div class="hud-row"><span class="label">View</span><span id="hud-mode">CRAFT</span></div>
+    <div class="hud-row"><span class="label">Vessel</span><span id="hud-vessel">1/1</span></div>
+    <div id="node-info" style="display:none">
+      <div class="hud-row"><span class="label">Node T-</span><span id="node-eta">—</span></div>
+      <div class="hud-row"><span class="label">Node Δv</span><span id="node-dv">—</span></div>
+      <div class="hud-row"><span class="label">Intercept</span><span id="node-enc">—</span></div>
+    </div>
     <div id="hud-status" class="status">SUBORBITAL</div>
   </div>
 
@@ -43,8 +49,9 @@
     <div><kbd>Shift</kbd> <kbd>Ctrl</kbd> Throttle &middot; <kbd>Z</kbd> <kbd>X</kbd> Full/Cut</div>
     <div><kbd>A</kbd> <kbd>D</kbd> / <kbd>&larr;</kbd> <kbd>&rarr;</kbd> Rotate</div>
     <div><kbd>G</kbd> Stage &middot; <kbd>P</kbd> Parachute</div>
+    <div><kbd>N</kbd> Node &middot; <kbd>J</kbd> <kbd>L</kbd> Prograde &middot; <kbd>I</kbd> <kbd>K</kbd> Radial &middot; <kbd>U</kbd> <kbd>O</kbd> Slide</div>
     <div><kbd>,</kbd> <kbd>.</kbd> Warp &middot; <kbd>Wheel</kbd> Zoom</div>
-    <div><kbd>M</kbd> Map/Craft &middot; <kbd>[</kbd> <kbd>]</kbd> Focus &middot; <kbd>F</kbd> Frame</div>
+    <div><kbd>M</kbd> Map/Craft &middot; <kbd>[</kbd> <kbd>]</kbd> Switch vessel / Focus &middot; <kbd>F</kbd> Frame</div>
     <div><kbd>V</kbd> Ship builder &middot; <kbd>B</kbd> System builder</div>
     <div><kbd>R</kbd> Relaunch &middot; <kbd>Esc</kbd> Menu</div>
   </div>
@@ -61,6 +68,7 @@
   <script src="js/physics.js"></script>
   <script src="js/aero.js"></script>
   <script src="js/kepler.js"></script>
+  <script src="js/maneuver.js"></script>
   <script src="js/bodies.js"></script>
   <script src="js/systems.js"></script>
   <script src="js/parts.js"></script>

@@ -33,6 +33,7 @@ flight. Flight HUD/legend are CSS-hidden unless `game.uiMode === "flight"`
 | `js/effects.js` | Particle pool (exhaust/plasma/explosion/smoke) + camera shake — craft view only |
 | `js/audio.js` | Synthesized WebAudio (engine/wind loops + one-shots); inits on first user gesture |
 | `js/kepler.js` | Analytic Kepler: elements/propagate/sampleEllipse/stateAtNu (rails warp, trajectory) |
+| `js/maneuver.js` | `SG.Maneuver`: maneuver-node prediction + moon SOI-encounter search (M2) |
 | `js/bodies.js` | `SG.Body`, `SG.SolarSystem` (on-rails motion, SOI `dominantBody`) |
 | `js/systems.js` | Real solar-system defs, `buildSystem`, **`scaleSystem`**, `SystemStore` (+save-scale) |
 | `js/parts.js` | Part catalog, **`Parts.effective`** (parametric stats), **`SG.PartRender`** (shared renderer) |
@@ -73,6 +74,30 @@ Singletons wired on DOMContentLoaded: `SG.game`, `SG.shipBuilder`,
   `stageStats()` (current-fuel Tsiolkovsky per stage) is the single source of
   truth for Δv — builder panel and flight HUD both use it; `deltaV()` is its
   sum, so in flight it means "Δv remaining".
+- **Multiple vessels:** the game owns `game.vessels` (a list of `SG.Ship`);
+  `game.ship` is always `vessels[game.activeIndex]`, the one you fly.
+  `game.primary` is the player's command craft — its death runs the relaunch
+  flow; debris just get culled (`_cullVessels`). Per-vessel sim state (`landed`,
+  `dominant`, `aero`, `crashTimer`) lives on each `SG.Ship`; `game.dominant`/
+  `landed`/`aero` are getters proxying the ACTIVE vessel (keeps HUD/tests
+  reading `game.dominant` working). Every substep steps ALL vessels
+  (`_stepVessel` / rails plans in `_railsSub`); debris feel gravity + drag but
+  take no input. Staging (`_spawnDebris`) turns the shed parts into a debris
+  vessel kicked aft that drops away under drag. `[` `]` switch vessels in craft
+  view (they cycle map focus in map view).
+- **Maneuver nodes (M2):** `game.node = {t, pro, rad}` — a planned burn (prograde
+  + radial Δv, m/s) at absolute sim-time `t`. `SG.Maneuver.compute(game)` coasts
+  the current orbit to `t` (Kepler), applies the Δv, and returns the post-burn
+  ellipse + first moon **SOI encounter** (found by walking the predicted orbit
+  and comparing against the moon's future rail position — bodies orbit on
+  `phase + omega·t`, so future positions are exact). All in the dominant body's
+  frame, anchored on `dom` at draw time, matching `_drawTrajectory`. Executing:
+  `_stepVessel` calls `_consumeNode` while the active vessel thrusts, shrinking
+  the Δv vector by the progress made along `_burnUnit`; the node auto-clears when
+  done. Keys: `N` plot/clear, `J`/`L` prograde, `I`/`K` radial, `U`/`O` slide in
+  time (held, continuous, tuned in `_editNode`). Node is per-vessel-orbit —
+  cleared on relaunch and vessel switch. Encounter search only handles children
+  of the current dominant body (moons), which is enough for a Moon transfer.
 - Ship physics point = assembly centre of mass; pad placement uses
   `assembly.bottomOffset()`.
 - **Aero (M1):** `body.atmosphere` is the atmosphere TOP altitude, `body.rho0`
@@ -110,8 +135,11 @@ auto-discovers).
 
 ## Where we are / what's next
 Done: **M0**, game-loop (menu/difficulty/parametric builder/stage-scoped
-fuel), and **M1** (atmosphere, drag, reentry heating + burn-up, parachute/
-heat-shield/fin parts, torque rotation, particles, camera shake, synth audio).
-Next per `ROADMAP.md`: **M2 — maneuver nodes, SOI-crossing trajectory
-prediction, encounter markers**. Deferred from M1: landing legs (need M3
-radial attachment).
+fuel), **M1** (atmosphere, drag, reentry heating + burn-up, parachute/
+heat-shield/fin parts, torque rotation, particles, camera shake, synth audio),
+multi-vessel + jettisoned-stage debris (drag drop-away, vessel switching), and
+**M2** (maneuver nodes with predicted post-burn orbit, moon SOI-encounter
+markers, node execution). Next per `ROADMAP.md`: **M3**. Deferred from M1:
+landing legs (need M3 radial attachment). M2 gaps: encounter search only finds
+moons of the current dominant body (no full interplanetary/SOI-exit prediction);
+no "warp to node".
